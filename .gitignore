@@ -1,0 +1,28 @@
+@'
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Expo / React Native
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+
+# Editors and OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generated test artifacts
+uploads/
+*.log
+'@ | Set-Content .gitignore
