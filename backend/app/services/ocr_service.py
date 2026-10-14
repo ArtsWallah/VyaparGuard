@@ -1,4 +1,3 @@
-
 import re
 from datetime import datetime
 from io import BytesIO
@@ -10,10 +9,11 @@ import pytesseract
 from PIL import Image
 from pytesseract import Output
 
-
+# Configure the Tesseract OCR executable on Windows
 pytesseract.pytesseract.tesseract_cmd = (
     r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 )
+
 
 
 def _normalize_text(text: str) -> str:
