@@ -46,7 +46,7 @@ export default function HomeScreen() {
 
         <Pressable
           style={styles.primaryButton}
-          onPress={() => router.push("/scan")}
+          onPress={() => router.push("/upload")}
         >
           <Text style={styles.primaryButtonText}>
             +  Analyze Payment Screenshot

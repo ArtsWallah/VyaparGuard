@@ -149,7 +149,34 @@ def analyze_payment_image(
             "Image analysis failed.",
         ) from exc
 
+    reasons = [
+        "Screenshot analysis cannot establish that a payment was received. "
+        "No trusted transaction source has been checked."
+    ]
+    if forensic_result.get("limitations"):
+        reasons.extend(forensic_result["limitations"])
+
     return {
+        "scan_id": metadata["sha256"][:12],
+        "status": "UNVERIFIED",
+        "extracted": {
+            "amount": ocr.get("amount"),
+            "transaction_id": ocr.get("transaction_id"),
+            "upi_reference": ocr.get("upi_reference"),
+            "reference": ocr.get("reference"),
+            "date": ocr.get("date"),
+            "time": ocr.get("time"),
+            "timestamp": ocr.get("timestamp"),
+            "payee": ocr.get("payee"),
+            "currency": ocr.get("currency"),
+            "displayed_status": ocr.get("displayed_status"),
+        },
+        "checks": {
+            "duplicate": False,
+            "trusted_record_match": False,
+        },
+        "reasons": reasons,
+        "verification_source": "none",
         "schema_version": "1.0",
         "file": {
             **metadata,
