@@ -1,166 +1,571 @@
 
-import React from "react";
-import { SafeAreaView, ScrollView, View, Text, StyleSheet, Pressable } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useMemo } from "react";
+import {
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    Pressable,
+    View,
+} from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+
+type PaymentOCR = {
+    raw_text?: string;
+    confidence?: number | null;
+    amount?: number | null;
+    currency?: string | null;
+    date?: string | null;
+    time?: string | null;
+    timestamp?: string | null;
+    transaction_id?: string | null;
+    upi_reference?: string | null;
+    reference?: string | null;
+    payee?: string | null;
+    displayed_status?: string | null;
+    fields_missing?: string[];
+};
 
 type ScanResult = {
-    scan_id: string;
-    status: "VERIFIED" | "SUSPICIOUS" | "UNVERIFIED";
+    schema_version?: string;
+    scan_id?: string;
+    status?: string;
     extracted?: {
         amount?: number | null;
         transaction_id?: string | null;
+        upi_reference?: string | null;
+        reference?: string | null;
         date?: string | null;
+        time?: string | null;
+        timestamp?: string | null;
+        payee?: string | null;
+        currency?: string | null;
+        displayed_status?: string | null;
     };
     reasons?: string[];
     verification_source?: string;
+    file?: {
+        filename?: string;
+        content_type?: string;
+        size_bytes?: number;
+        [key: string]: unknown;
+    };
+    ocr?: PaymentOCR;
+    image_quality?: {
+        width?: number;
+        height?: number;
+        sharpness_score?: number;
+    };
+    forensics?: {
+        ela_mean?: number | null;
+        indicators?: string[];
+        assessment?: string;
+        limitations?: string[];
+    };
+    errors?: string[];
+    verification?: {
+        status?: string;
+        source?: string;
+        reason?: string;
+    };
 };
 
-export default function ResultScreen() {
-    const router = useRouter();
-    const params = useLocalSearchParams<{ result?: string }>();
-
-    let result: ScanResult | null = null;
-
-    try {
-        if (typeof params.result === "string") {
-            result = JSON.parse(params.result) as ScanResult;
-        }
-    } catch {
-        result = null;
+function displayValue(value: string | number | null | undefined): string {
+    if (value === null || value === undefined || value === "") {
+        return "Not detected";
     }
 
-    const status = result?.status ?? "UNVERIFIED";
+    return String(value);
+}
 
-    const statusColor =
-        status === "VERIFIED"
-            ? "#176B55"
-            : status === "SUSPICIOUS"
-                ? "#B45309"
-                : "#64748B";
+function formatAmount(
+    amount: number | null | undefined,
+    currency?: string | null
+): string {
+    if (amount === null || amount === undefined) return "Not detected";
+
+    const currencyCode = currency || "INR";
+
+    if (currencyCode === "INR") {
+        return `₹${amount.toLocaleString("en-IN", {
+            maximumFractionDigits: 2,
+        })}`;
+    }
+
+    return `${currencyCode} ${amount.toLocaleString("en-IN", {
+        maximumFractionDigits: 2,
+    })}`;
+}
+
+function formatLabel(value?: string): string {
+    if (!value) return "Unavailable";
+
+    return value
+        .replace(/_/g, " ")
+        .toLowerCase()
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export default function ResultScreen() {
+    const params = useLocalSearchParams<{ result?: string | string[] }>();
+
+    const resultString = Array.isArray(params.result)
+        ? params.result[0]
+        : params.result;
+
+    const parsed = useMemo(() => {
+        if (!resultString) {
+            return {
+                data: null as ScanResult | null,
+                error: "No analysis result was provided.",
+            };
+        }
+
+        try {
+            let jsonString = resultString;
+            try {
+                jsonString = decodeURIComponent(resultString);
+            } catch {
+                // If decodeURIComponent fails, fallback to raw string
+            }
+
+            return {
+                data: JSON.parse(jsonString) as ScanResult,
+                error: null as string | null,
+            };
+        } catch {
+            return {
+                data: null as ScanResult | null,
+                error: "The analysis result could not be read. Please scan again.",
+            };
+        }
+    }, [resultString]);
+
+    const data = parsed.data;
+    const ocr = data?.ocr ?? (data?.extracted ? {
+        amount: data.extracted.amount,
+        currency: data.extracted.currency,
+        date: data.extracted.date,
+        time: data.extracted.time,
+        timestamp: data.extracted.timestamp,
+        transaction_id: data.extracted.transaction_id,
+        upi_reference: data.extracted.upi_reference,
+        reference: data.extracted.reference,
+        payee: data.extracted.payee,
+        displayed_status: data.extracted.displayed_status,
+        fields_missing: [],
+    } : undefined);
+    const forensics = data?.forensics;
+    const verification = data?.verification;
+    const quality = data?.image_quality;
+
+    if (!data) {
+        return (
+            <SafeAreaView style={styles.safeArea}>
+                <View style={styles.errorContainer}>
+                    <Text style={styles.eyebrow}>VYAPARGUARD</Text>
+                    <Text style={styles.title}>Result unavailable</Text>
+                    <Text style={styles.bodyText}>{parsed.error}</Text>
+                    <Pressable
+                        onPress={() => router.replace("/upload")}
+                        style={styles.primaryButton}
+                    >
+                        <Text style={styles.primaryButtonText}>Scan again</Text>
+                    </Pressable>
+                </View>
+            </SafeAreaView>
+        );
+    }
+
+    const verificationStatus =
+        verification?.status || data?.status || "UNVERIFIED";
 
     return (
-        <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={styles.content}>
-                <Text style={styles.heading}>Analysis Result</Text>
-
-                <View style={styles.card}>
-                    <Text style={[styles.status, { color: statusColor }]}>{status}</Text>
-                    <Text style={styles.description}>
-                        {status === "VERIFIED"
-                            ? "A trusted transaction record confirmed this payment."
-                            : status === "SUSPICIOUS"
-                                ? "Potential inconsistencies require further checking."
-                                : "The payment has not been confirmed by a trusted record."}
-                    </Text>
-
-                    <View style={styles.divider} />
-
-                    <Text style={styles.label}>Amount</Text>
-                    <Text style={styles.value}>
-                        {result?.extracted?.amount != null
-                            ? `₹${result.extracted.amount}`
-                            : "Not extracted"}
-                    </Text>
-
-                    <Text style={styles.label}>Transaction ID</Text>
-                    <Text style={styles.value}>
-                        {result?.extracted?.transaction_id || "Not extracted"}
-                    </Text>
-
-                    <Text style={styles.label}>Date</Text>
-                    <Text style={styles.value}>
-                        {result?.extracted?.date || "Not extracted"}
-                    </Text>
-
-                    <Text style={styles.label}>Reasons</Text>
-                    {(result?.reasons?.length
-                        ? result.reasons
-                        : ["No additional details were returned."]
-                    ).map((reason, index) => (
-                        <Text key={`${index}-${reason}`} style={styles.reason}>
-                            • {reason}
-                        </Text>
-                    ))}
-                </View>
-
-                <Text style={styles.warning}>
-                    Always confirm receipt in your actual bank or payment account.
-                    Screenshot analysis alone does not prove that money was received.
-                </Text>
-
-                <Pressable style={styles.button} onPress={() => router.replace("/")}>
-                    <Text style={styles.buttonText}>Back to Home</Text>
+        <SafeAreaView style={styles.safeArea}>
+            <ScrollView contentContainerStyle={styles.container}>
+                <Pressable
+                    onPress={() => router.replace("/upload")}
+                    style={styles.backButton}
+                >
+                    <Text style={styles.backText}>‹ Scan another screenshot</Text>
                 </Pressable>
 
+                <Text style={styles.eyebrow}>VYAPARGUARD / SCAN REPORT</Text>
+                <Text style={styles.title}>Analysis results</Text>
+                <Text style={styles.subtitle}>
+                    Extracted information and image inspection findings.
+                </Text>
+
+                <View style={styles.verificationCard}>
+                    <Text style={styles.sectionEyebrow}>PAYMENT VERIFICATION</Text>
+                    <Text style={styles.verificationStatus}>
+                        {verificationStatus.replace(/_/g, " ")}
+                    </Text>
+                    <Text style={styles.bodyText}>
+                        {verification?.reason ||
+                            "No trusted transaction source confirmation was provided."}
+                    </Text>
+                    <View style={styles.sourceRow}>
+                        <Text style={styles.sourceLabel}>Verification source</Text>
+                        <Text style={styles.sourceValue}>
+                            {displayValue(verification?.source)}
+                        </Text>
+                    </View>
+                </View>
+
+                <View style={styles.amountCard}>
+                    <Text style={styles.mutedLabel}>AMOUNT READ FROM SCREENSHOT</Text>
+                    <Text style={styles.amount}>
+                        {formatAmount(ocr?.amount, ocr?.currency)}
+                    </Text>
+                    <Text style={styles.bodyText}>
+                        Displayed status: {displayValue(ocr?.displayed_status)}
+                    </Text>
+                </View>
+
+                <View style={styles.card}>
+                    <Text style={styles.sectionTitle}>Extracted transaction details</Text>
+                    <DetailRow label="Payee" value={displayValue(ocr?.payee)} />
+                    <DetailRow
+                        label="Transaction ID"
+                        value={displayValue(ocr?.transaction_id)}
+                    />
+                    <DetailRow
+                        label="UPI reference"
+                        value={displayValue(ocr?.upi_reference ?? ocr?.reference)}
+                    />
+                    <DetailRow label="Date" value={displayValue(ocr?.date)} />
+                    <DetailRow label="Time" value={displayValue(ocr?.time)} />
+                    <DetailRow
+                        label="OCR confidence"
+                        value={
+                            typeof ocr?.confidence === "number"
+                                ? `${(ocr.confidence * 100).toFixed(1)}%`
+                                : "Unavailable"
+                        }
+                        last
+                    />
+                </View>
+
+                <View style={styles.card}>
+                    <Text style={styles.sectionTitle}>Image forensics</Text>
+                    <DetailRow
+                        label="Assessment"
+                        value={formatLabel(forensics?.assessment)}
+                    />
+                    <DetailRow
+                        label="ELA mean"
+                        value={displayValue(forensics?.ela_mean)}
+                    />
+                    <DetailRow
+                        label="Image dimensions"
+                        value={
+                            quality?.width && quality?.height
+                                ? `${quality.width} × ${quality.height} px`
+                                : "Unavailable"
+                        }
+                    />
+                    <DetailRow
+                        label="Sharpness score"
+                        value={displayValue(quality?.sharpness_score)}
+                        last
+                    />
+
+                    <Text style={styles.subheading}>Indicators</Text>
+                    {forensics?.indicators?.length ? (
+                        forensics.indicators.map((indicator, index) => (
+                            <Text key={`${indicator}-${index}`} style={styles.bulletText}>
+                                • {indicator}
+                            </Text>
+                        ))
+                    ) : (
+                        <Text style={styles.bodyText}>
+                            No manipulation indicators were reported by this analysis.
+                        </Text>
+                    )}
+
+                    {!!forensics?.limitations?.length && (
+                        <>
+                            <Text style={styles.subheading}>Limitations</Text>
+                            {forensics.limitations.map((limitation, index) => (
+                                <Text key={`${limitation}-${index}`} style={styles.bulletText}>
+                                    • {limitation}
+                                </Text>
+                            ))}
+                        </>
+                    )}
+                </View>
+
+                {!!ocr?.fields_missing?.length && (
+                    <View style={styles.warningCard}>
+                        <Text style={styles.warningTitle}>Missing information</Text>
+                        <Text style={styles.bodyText}>
+                            {ocr.fields_missing.join(", ")}
+                        </Text>
+                    </View>
+                )}
+
+                {!!data.errors?.length && (
+                    <View style={styles.warningCard}>
+                        <Text style={styles.warningTitle}>Processing messages</Text>
+                        {data.errors.map((error, index) => (
+                            <Text key={`${error}-${index}`} style={styles.bodyText}>
+                                • {error}
+                            </Text>
+                        ))}
+                    </View>
+                )}
+
+                {!!ocr?.raw_text && (
+                    <View style={styles.card}>
+                        <Text style={styles.sectionTitle}>Raw OCR text</Text>
+                        <Text selectable style={styles.rawText}>
+                            {ocr.raw_text}
+                        </Text>
+                    </View>
+                )}
+
+                <View style={styles.disclaimer}>
+                    <Text style={styles.disclaimerTitle}>Do not rely on the screenshot alone</Text>
+                    <Text style={styles.disclaimerText}>
+                        A screenshot can display “Payment Successful” even when the
+                        transaction has not been received. OCR and image forensics are
+                        screening tools, not proof of payment. Confirm the transaction
+                        through your bank or a trusted transaction source.
+                    </Text>
+                </View>
+
                 <Pressable
-                    style={styles.secondaryButton}
                     onPress={() => router.replace("/upload")}
+                    style={styles.primaryButton}
                 >
-                    <Text style={styles.secondaryText}>Analyze Another Screenshot</Text>
+                    <Text style={styles.primaryButtonText}>Analyze another screenshot</Text>
                 </Pressable>
             </ScrollView>
         </SafeAreaView>
     );
 }
 
+function DetailRow({
+    label,
+    value,
+    last = false,
+}: {
+    label: string;
+    value: string;
+    last?: boolean;
+}) {
+    return (
+        <View style={[styles.detailRow, !last && styles.detailBorder]}>
+            <Text style={styles.detailLabel}>{label}</Text>
+            <Text selectable style={styles.detailValue}>
+                {value}
+            </Text>
+        </View>
+    );
+}
+
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#F8FAFC" },
-    content: { padding: 22, paddingBottom: 36 },
-    heading: {
-        fontSize: 27,
-        fontWeight: "800",
-        color: "#102A43",
+    safeArea: {
+        flex: 1,
+        backgroundColor: "#F7F8FA",
+    },
+    container: {
+        padding: 20,
+        paddingBottom: 40,
+    },
+    errorContainer: {
+        flex: 1,
+        padding: 24,
+        justifyContent: "center",
+    },
+    backButton: {
+        alignSelf: "flex-start",
+        paddingVertical: 8,
         marginBottom: 22,
+    },
+    backText: {
+        color: "#344054",
+        fontSize: 14,
+        fontWeight: "700",
+    },
+    eyebrow: {
+        color: "#18794E",
+        fontSize: 11,
+        fontWeight: "800",
+        letterSpacing: 1.4,
+        marginBottom: 9,
+    },
+    title: {
+        color: "#101828",
+        fontSize: 28,
+        fontWeight: "800",
+        marginBottom: 8,
+    },
+    subtitle: {
+        color: "#667085",
+        fontSize: 14,
+        lineHeight: 21,
+        marginBottom: 22,
+    },
+    verificationCard: {
+        backgroundColor: "#FFF8E7",
+        borderColor: "#F0D58A",
+        borderWidth: 1,
+        borderRadius: 15,
+        padding: 17,
+        marginBottom: 15,
+    },
+    sectionEyebrow: {
+        color: "#805B10",
+        fontSize: 10,
+        fontWeight: "800",
+        letterSpacing: 1.2,
+        marginBottom: 8,
+    },
+    verificationStatus: {
+        color: "#805B10",
+        fontSize: 24,
+        fontWeight: "900",
+        marginBottom: 9,
+    },
+    sourceRow: {
+        marginTop: 14,
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderTopColor: "#F0D58A",
+    },
+    sourceLabel: {
+        color: "#715B2A",
+        fontSize: 12,
+        marginBottom: 4,
+    },
+    sourceValue: {
+        color: "#805B10",
+        fontSize: 14,
+        fontWeight: "700",
+    },
+    amountCard: {
+        backgroundColor: "#FFFFFF",
+        borderWidth: 1,
+        borderColor: "#E4E7EC",
+        borderRadius: 15,
+        padding: 18,
+        marginBottom: 15,
+    },
+    mutedLabel: {
+        color: "#667085",
+        fontSize: 10,
+        fontWeight: "800",
+        letterSpacing: 1,
+        marginBottom: 8,
+    },
+    amount: {
+        color: "#101828",
+        fontSize: 32,
+        fontWeight: "900",
+        marginBottom: 9,
     },
     card: {
         backgroundColor: "#FFFFFF",
-        borderRadius: 18,
-        padding: 20,
+        borderColor: "#E4E7EC",
         borderWidth: 1,
-        borderColor: "#E8EEF2",
+        borderRadius: 15,
+        padding: 17,
+        marginBottom: 15,
     },
-    status: { fontSize: 25, fontWeight: "800" },
-    description: {
-        color: "#64748B",
-        fontSize: 14,
-        lineHeight: 22,
-        marginTop: 8,
+    sectionTitle: {
+        color: "#101828",
+        fontSize: 17,
+        fontWeight: "800",
+        marginBottom: 12,
     },
-    divider: { height: 1, backgroundColor: "#E8EEF2", marginVertical: 20 },
-    label: {
-        color: "#64748B",
+    detailRow: {
+        paddingVertical: 12,
+        gap: 5,
+    },
+    detailBorder: {
+        borderBottomWidth: 1,
+        borderBottomColor: "#EAECF0",
+    },
+    detailLabel: {
+        color: "#667085",
         fontSize: 12,
-        marginTop: 14,
-        marginBottom: 4,
     },
-    value: { color: "#102A43", fontSize: 15, fontWeight: "600" },
-    reason: {
-        color: "#475569",
+    detailValue: {
+        color: "#101828",
+        fontSize: 14,
+        fontWeight: "600",
+        lineHeight: 21,
+    },
+    subheading: {
+        color: "#344054",
+        fontSize: 13,
+        fontWeight: "800",
+        marginTop: 16,
+        marginBottom: 8,
+    },
+    bodyText: {
+        color: "#667085",
         fontSize: 13,
         lineHeight: 20,
-        marginTop: 6,
     },
-    warning: {
-        color: "#725B32",
-        backgroundColor: "#FFF5DE",
-        borderRadius: 14,
-        padding: 15,
+    bulletText: {
+        color: "#475467",
+        fontSize: 13,
         lineHeight: 20,
+        marginBottom: 6,
+    },
+    warningCard: {
+        backgroundColor: "#FFF8E7",
+        borderWidth: 1,
+        borderColor: "#F0D58A",
+        borderRadius: 12,
+        padding: 15,
+        marginBottom: 15,
+    },
+    warningTitle: {
+        color: "#805B10",
+        fontSize: 14,
+        fontWeight: "800",
+        marginBottom: 7,
+    },
+    rawText: {
+        color: "#475467",
         fontSize: 12,
-        marginTop: 18,
+        lineHeight: 19,
     },
-    button: {
-        backgroundColor: "#176B55",
-        padding: 17,
-        borderRadius: 14,
+    disclaimer: {
+        backgroundColor: "#EEF4FF",
+        borderColor: "#C7D7FE",
+        borderWidth: 1,
+        borderRadius: 12,
+        padding: 15,
+        marginBottom: 20,
+    },
+    disclaimerTitle: {
+        color: "#1849A9",
+        fontSize: 14,
+        fontWeight: "800",
+        marginBottom: 7,
+    },
+    disclaimerText: {
+        color: "#344054",
+        fontSize: 13,
+        lineHeight: 20,
+    },
+    primaryButton: {
+        backgroundColor: "#157347",
+        borderRadius: 12,
+        minHeight: 52,
         alignItems: "center",
-        marginTop: 20,
+        justifyContent: "center",
+        padding: 14,
     },
-    buttonText: { color: "#FFFFFF", fontWeight: "700" },
-    secondaryButton: {
-        padding: 16,
-        alignItems: "center",
-        marginTop: 8,
+    primaryButtonText: {
+        color: "#FFFFFF",
+        fontSize: 14,
+        fontWeight: "800",
+        textAlign: "center",
     },
-    secondaryText: { color: "#176B55", fontWeight: "700" },
 });
