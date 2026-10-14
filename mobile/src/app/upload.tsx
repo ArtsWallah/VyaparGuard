@@ -1,106 +1,208 @@
 
-import React, { useState } from "react";
+import { useState } from "react";
 import {
-    SafeAreaView,
-    ScrollView,
-    View,
-    Text,
-    StyleSheet,
-    Pressable,
-    Image,
-    Alert,
     ActivityIndicator,
+    Alert,
+    Image,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import { router } from "expo-router";
 
-type ScanResult = {
-    scan_id: string;
-    status: "VERIFIED" | "SUSPICIOUS" | "UNVERIFIED";
-    extracted?: {
-        amount?: number | null;
-        transaction_id?: string | null;
-        date?: string | null;
-    };
-    reasons?: string[];
-    verification_source?: string;
+const API_URL = "http://172.22.63.92:8000";
+
+type SelectedImage = {
+    uri: string;
+    fileName?: string | null;
+    mimeType?: string | null;
+    fileSize?: number;
 };
 
-const API_URL = "http://192.168.1.10:8000";
-// Replace this with your laptop's actual IPv4 address.
+type ScanResponse = {
+    schema_version?: string;
+    file?: Record<string, unknown>;
+    ocr?: Record<string, unknown>;
+    image_quality?: Record<string, unknown>;
+    forensics?: Record<string, unknown>;
+    errors?: string[];
+    verification?: Record<string, unknown>;
+    detail?: string | { msg?: string }[];
+};
 
 export default function UploadScreen() {
-    const router = useRouter();
-    const [image, setImage] = useState<ImagePicker.ImagePickerAsset | null>(
-        null
-    );
+    const [image, setImage] = useState<SelectedImage | null>(null);
     const [loading, setLoading] = useState(false);
 
     async function chooseImage() {
         try {
+            const permission =
+                await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+            if (!permission.granted) {
+                Alert.alert(
+                    "Permission required",
+                    "Allow photo library access to select a payment screenshot."
+                );
+                return;
+            }
+
             const result = await ImagePicker.launchImageLibraryAsync({
                 mediaTypes: ["images"],
                 allowsEditing: false,
                 quality: 1,
             });
 
-            if (!result.canceled && result.assets.length > 0) {
-                setImage(result.assets[0]);
-            }
-        } catch {
-            Alert.alert("Image error", "Could not open the image gallery.");
+            if (result.canceled || !result.assets?.length) return;
+
+            const asset = result.assets[0];
+
+            setImage({
+                uri: asset.uri,
+                fileName: asset.fileName,
+                mimeType: asset.mimeType,
+                fileSize: asset.fileSize,
+            });
+        } catch (error) {
+            Alert.alert(
+                "Image selection failed",
+                error instanceof Error ? error.message : "Please try again."
+            );
         }
     }
 
-    async function analyzeImage() {
-        if (!image) {
-            Alert.alert("Select an image", "Choose a screenshot first.");
+    async function analyzeScreenshot() {
+        if (!image?.uri) {
+            Alert.alert("Select an image", "Choose a payment screenshot first.");
+            return;
+        }
+
+        if (image.fileSize && image.fileSize > 10 * 1024 * 1024) {
+            Alert.alert(
+                "File too large",
+                "The selected image exceeds the 10 MB processing limit. Please choose a smaller image."
+            );
             return;
         }
 
         setLoading(true);
 
         try {
-            const formData = new FormData();
+            // Give the multipart file part an explicit filename and MIME type.
+            const extension = image.fileName?.split(".").pop()?.toLowerCase();
+            const mimeType =
+                image.mimeType ||
+                (extension === "png" ? "image/png" : "image/jpeg");
+            const filename =
+                image.fileName || `payment-screenshot.${extension || "jpg"}`;
 
-            formData.append(
-                "image",
-                {
-                    uri: image.uri,
-                    name: image.fileName || "payment-screenshot.jpg",
-                    type: image.mimeType || "image/jpeg",
-                } as unknown as Blob
-            );
+            let responseStatus: number;
+            let responseText: string;
 
-            const response = await fetch(`${API_URL}/api/v1/scan`, {
-                method: "POST",
-                body: formData,
-            });
+            if (Platform.OS !== "web") {
+                try {
+                    // Use native multipart uploader (handles content:// and file:// reliably)
+                    const uploadResult = await FileSystem.uploadAsync(
+                        `${API_URL}/api/v1/scan`,
+                        image.uri,
+                        {
+                            httpMethod: "POST",
+                            uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+                            fieldName: "image",
+                            mimeType: mimeType,
+                        }
+                    );
+                    responseStatus = uploadResult.status;
+                    responseText = uploadResult.body;
+                } catch {
+                    // Fallback to fetch with FormData if uploadAsync encounters an issue
+                    const formData = new FormData();
+                    const filePart = {
+                        uri: image.uri,
+                        name: filename,
+                        type: mimeType,
+                    } as unknown as Blob;
+                    formData.append("image", filePart);
+                    formData.append("file", filePart);
 
-            const data = await response.json();
+                    const response = await fetch(`${API_URL}/api/v1/scan`, {
+                        method: "POST",
+                        body: formData,
+                    });
+                    responseStatus = response.status;
+                    responseText = await response.text();
+                }
+            } else {
+                // Web: convert local blob URI to real Blob
+                const formData = new FormData();
+                const imageFetch = await fetch(image.uri);
+                const blob = await imageFetch.blob();
+                formData.append("image", blob, filename);
+                formData.append("file", blob, filename);
 
-            if (!response.ok) {
+                const response = await fetch(`${API_URL}/api/v1/scan`, {
+                    method: "POST",
+                    body: formData,
+                });
+                responseStatus = response.status;
+                responseText = await response.text();
+            }
+
+            let data: ScanResponse;
+
+            try {
+                data = JSON.parse(responseText) as ScanResponse;
+            } catch {
                 throw new Error(
-                    typeof data.detail === "string"
-                        ? data.detail
-                        : "The backend rejected the image."
+                    `The server returned an invalid response (HTTP ${responseStatus}).`
                 );
             }
 
-            const result = data as ScanResult;
+            if (responseStatus < 200 || responseStatus >= 300) {
+                const detail = data.detail;
+                let message = `Request failed (HTTP ${responseStatus}).`;
+
+                if (typeof detail === "string") {
+                    message = detail;
+                } else if (Array.isArray(detail)) {
+                    message = detail
+                        .map((item) =>
+                            typeof item === "object" && item && "msg" in item
+                                ? String(item.msg)
+                                : String(item)
+                        )
+                        .join("\n");
+                } else if (typeof detail === "object" && detail !== null) {
+                    const detailObj = detail as Record<string, unknown>;
+                    message = String(
+                        detailObj.message ||
+                        detailObj.msg ||
+                        detailObj.detail ||
+                        message
+                    );
+                }
+
+                throw new Error(message);
+            }
 
             router.push({
                 pathname: "/result",
                 params: {
-                    result: JSON.stringify(result),
+                    result: encodeURIComponent(JSON.stringify(data)),
                 },
             });
         } catch (error) {
             Alert.alert(
-                "Unable to analyze",
+                "Analysis failed",
                 error instanceof Error
-                    ? `${error.message}\n\nCheck that the backend is running, your API address is correct, and your phone can reach your laptop.`
-                    : "An unexpected error occurred."
+                    ? `${error.message}\n\nCheck that the backend is running and your phone can reach ${API_URL}.`
+                    : "Could not upload the screenshot. Please try again."
             );
         } finally {
             setLoading(false);
@@ -108,126 +210,239 @@ export default function UploadScreen() {
     }
 
     return (
-        <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={styles.content}>
-                <Pressable onPress={() => router.back()}>
-                    <Text style={styles.backText}>‹  Back</Text>
+        <SafeAreaView style={styles.safeArea}>
+            <ScrollView contentContainerStyle={styles.container}>
+                <Pressable
+                    onPress={() => router.back()}
+                    style={styles.backButton}
+                    accessibilityRole="button"
+                >
+                    <Text style={styles.backText}>‹ Back</Text>
                 </Pressable>
 
-                <Text style={styles.title}>Upload Payment</Text>
+                <Text style={styles.eyebrow}>VYAPARGUARD / SCANNER</Text>
+                <Text style={styles.title}>Analyze payment screenshot</Text>
                 <Text style={styles.description}>
-                    Choose a screenshot for inspection.
+                    Upload a payment screenshot to extract transaction details and
+                    inspect possible image manipulation indicators.
                 </Text>
 
-                <Pressable style={styles.chooseButton} onPress={chooseImage}>
-                    <Text style={styles.chooseText}>
-                        {image ? "Choose Another Image" : "Choose Screenshot"}
-                    </Text>
-                </Pressable>
-
-                {image && (
-                    <View style={styles.previewContainer}>
+                <View style={styles.uploadCard}>
+                    {image ? (
                         <Image source={{ uri: image.uri }} style={styles.preview} />
-                        <Text style={styles.fileName}>
-                            {image.fileName || "Selected screenshot"}
+                    ) : (
+                        <View style={styles.placeholder}>
+                            <Text style={styles.placeholderIcon}>▧</Text>
+                            <Text style={styles.placeholderTitle}>
+                                No screenshot selected
+                            </Text>
+                            <Text style={styles.placeholderDescription}>
+                                Choose a PNG or JPEG image from your phone.
+                            </Text>
+                        </View>
+                    )}
+
+                    <Pressable
+                        onPress={chooseImage}
+                        disabled={loading}
+                        style={({ pressed }) => [
+                            styles.secondaryButton,
+                            pressed && styles.pressed,
+                            loading && styles.disabled,
+                        ]}
+                    >
+                        <Text style={styles.secondaryButtonText}>
+                            {image ? "Choose another image" : "Choose screenshot"}
                         </Text>
-                    </View>
-                )}
+                    </Pressable>
+
+                    {image?.fileName ? (
+                        <Text style={styles.fileName} numberOfLines={2}>
+                            {image.fileName}
+                        </Text>
+                    ) : null}
+                </View>
 
                 <Pressable
-                    style={[styles.analyzeButton, loading && styles.disabled]}
-                    onPress={analyzeImage}
-                    disabled={loading}
+                    onPress={analyzeScreenshot}
+                    disabled={!image || loading}
+                    style={({ pressed }) => [
+                        styles.primaryButton,
+                        (!image || loading) && styles.disabled,
+                        pressed && styles.pressed,
+                    ]}
                 >
                     {loading ? (
-                        <ActivityIndicator color="#FFFFFF" />
+                        <View style={styles.loadingRow}>
+                            <ActivityIndicator color="#FFFFFF" />
+                            <Text style={styles.primaryButtonText}>Analyzing...</Text>
+                        </View>
                     ) : (
-                        <Text style={styles.analyzeText}>Analyze Screenshot</Text>
+                        <Text style={styles.primaryButtonText}>
+                            Analyze screenshot →
+                        </Text>
                     )}
                 </Pressable>
 
-                <Text style={styles.note}>
-                    The current backend is a placeholder. It returns UNVERIFIED until
-                    OCR, image checks and trusted-record reconciliation are implemented.
-                </Text>
+                <View style={styles.notice}>
+                    <Text style={styles.noticeTitle}>Important verification notice</Text>
+                    <Text style={styles.noticeText}>
+                        OCR reads text from an image, and forensic checks look for possible
+                        manipulation indicators. Neither proves that money was received.
+                        Always confirm payment in your bank or trusted transaction records.
+                    </Text>
+                </View>
             </ScrollView>
         </SafeAreaView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    safeArea: {
         flex: 1,
-        backgroundColor: "#F8FAFC",
+        backgroundColor: "#F7F8FA",
     },
-    content: {
+    container: {
         padding: 22,
-        paddingBottom: 36,
+        paddingBottom: 40,
+    },
+    backButton: {
+        alignSelf: "flex-start",
+        paddingVertical: 8,
+        paddingRight: 12,
+        marginBottom: 22,
     },
     backText: {
-        color: "#176B55",
-        fontSize: 17,
+        color: "#344054",
+        fontSize: 16,
         fontWeight: "600",
-        marginBottom: 20,
+    },
+    eyebrow: {
+        color: "#18794E",
+        fontSize: 11,
+        fontWeight: "800",
+        letterSpacing: 1.5,
+        marginBottom: 10,
     },
     title: {
-        fontSize: 27,
+        color: "#101828",
+        fontSize: 28,
+        lineHeight: 35,
         fontWeight: "800",
-        color: "#102A43",
+        marginBottom: 10,
     },
     description: {
-        fontSize: 14,
-        lineHeight: 22,
-        color: "#64748B",
-        marginTop: 10,
+        color: "#667085",
+        fontSize: 15,
+        lineHeight: 23,
         marginBottom: 25,
     },
-    chooseButton: {
-        padding: 17,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: "#176B55",
-        alignItems: "center",
-    },
-    chooseText: {
-        color: "#176B55",
-        fontWeight: "700",
-    },
-    previewContainer: {
-        marginTop: 20,
+    uploadCard: {
         backgroundColor: "#FFFFFF",
-        borderRadius: 14,
-        padding: 10,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: "#E4E7EC",
+        padding: 15,
+        marginBottom: 16,
     },
     preview: {
         width: "100%",
-        height: 350,
+        height: 320,
+        borderRadius: 12,
+        backgroundColor: "#EAECF0",
         resizeMode: "contain",
+        marginBottom: 15,
+    },
+    placeholder: {
+        minHeight: 220,
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 22,
+        marginBottom: 15,
+        backgroundColor: "#F9FAFB",
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: "#EAECF0",
+        borderStyle: "dashed",
+    },
+    placeholderIcon: {
+        fontSize: 38,
+        color: "#667085",
+        marginBottom: 12,
+    },
+    placeholderTitle: {
+        color: "#344054",
+        fontSize: 16,
+        fontWeight: "700",
+        marginBottom: 6,
+        textAlign: "center",
+    },
+    placeholderDescription: {
+        color: "#667085",
+        fontSize: 13,
+        lineHeight: 20,
+        textAlign: "center",
+    },
+    secondaryButton: {
+        minHeight: 48,
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 11,
+        borderWidth: 1,
+        borderColor: "#D0D5DD",
+        paddingHorizontal: 14,
+    },
+    secondaryButtonText: {
+        color: "#344054",
+        fontSize: 14,
+        fontWeight: "700",
     },
     fileName: {
-        color: "#64748B",
+        color: "#667085",
         fontSize: 12,
-        marginTop: 8,
+        marginTop: 10,
     },
-    analyzeButton: {
-        backgroundColor: "#176B55",
-        padding: 18,
-        borderRadius: 14,
+    primaryButton: {
+        minHeight: 54,
+        borderRadius: 12,
+        backgroundColor: "#157347",
         alignItems: "center",
-        marginTop: 22,
+        justifyContent: "center",
+        padding: 14,
+        marginBottom: 22,
     },
-    analyzeText: {
+    primaryButtonText: {
         color: "#FFFFFF",
-        fontWeight: "700",
         fontSize: 15,
+        fontWeight: "800",
+    },
+    loadingRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
     },
     disabled: {
-        opacity: 0.6,
+        opacity: 0.45,
     },
-    note: {
-        color: "#64748B",
-        fontSize: 12,
-        lineHeight: 19,
-        marginTop: 18,
+    pressed: {
+        opacity: 0.8,
+    },
+    notice: {
+        backgroundColor: "#FFF8E7",
+        borderColor: "#F0D58A",
+        borderWidth: 1,
+        borderRadius: 12,
+        padding: 15,
+    },
+    noticeTitle: {
+        color: "#805B10",
+        fontSize: 14,
+        fontWeight: "800",
+        marginBottom: 7,
+    },
+    noticeText: {
+        color: "#715B2A",
+        fontSize: 13,
+        lineHeight: 20,
     },
 });
