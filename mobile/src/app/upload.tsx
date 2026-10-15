@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
+import { File as ExpoFile } from 'expo-file-system';
 import { isScanResult } from '../utils/scan-result';
 import { getCapturedImage, clearCapturedImage } from '@/services/image_cache';
 
@@ -22,10 +22,10 @@ type SelectedImage = Pick<ImagePicker.ImagePickerAsset, 'uri'> & {
   fileName?: string | null;
   mimeType?: string | null;
   fileSize?: number | null;
-  webFile?: File;
+  webFile?: globalThis.File;
 };
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.22.63.92:8000';
 // Local development only; use HTTPS in production.
 
 export default function UploadScreen() {
@@ -156,38 +156,16 @@ export default function UploadScreen() {
       let responseText: string;
 
       if (Platform.OS !== 'web' && !image.webFile) {
-        try {
-          const uploadResult = await FileSystem.uploadAsync(
-            `${API_URL}/api/v1/scan`,
-            image.uri,
-            {
-              httpMethod: 'POST',
-              uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-              fieldName: 'image',
-              mimeType,
-            }
-          );
+        const formData = new FormData();
+        const nativeFile = new ExpoFile(image.uri);
+        formData.append('image', nativeFile, fileName);
 
-          responseStatus = uploadResult.status;
-          responseText = uploadResult.body;
-        } catch {
-          const formData = new FormData();
-          formData.append(
-            'image',
-            {
-              uri: image.uri,
-              name: fileName,
-              type: mimeType,
-            } as unknown as Blob
-          );
-
-          const response = await fetch(`${API_URL}/api/v1/scan`, {
-            method: 'POST',
-            body: formData,
-          });
-          responseStatus = response.status;
-          responseText = await response.text();
-        }
+        const response = await fetch(`${API_URL}/api/v1/scan`, {
+          method: 'POST',
+          body: formData,
+        });
+        responseStatus = response.status;
+        responseText = await response.text();
       } else {
         const formData = new FormData();
         if (image.webFile) {
