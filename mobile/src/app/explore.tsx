@@ -1,180 +1,233 @@
-import { Image } from 'expo-image';
-import { SymbolView } from 'expo-symbols';
-import { Platform, Pressable, ScrollView, StyleSheet } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ExternalLink } from '@/components/external-link';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Collapsible } from '@/components/ui/collapsible';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { useTheme } from '@/hooks/use-theme';
+import React from "react";
+import {
+  SafeAreaView,
+  ScrollView,
+  View,
+  Text,
+  StyleSheet,
+} from "react-native";
 
-export default function TabTwoScreen() {
-  const safeAreaInsets = useSafeAreaInsets();
-  const insets = {
-    ...safeAreaInsets,
-    bottom: safeAreaInsets.bottom + BottomTabInset + Spacing.three,
-  };
-  const theme = useTheme();
-
-  const contentPlatformStyle = Platform.select({
-    android: {
-      paddingTop: insets.top,
-      paddingLeft: insets.left,
-      paddingRight: insets.right,
-      paddingBottom: insets.bottom,
+export default function ExploreScreen() {
+  const checks = [
+    {
+      number: "01",
+      title: "Screenshot inspection",
+      description:
+        "Look for suspicious visual inconsistencies and signs that payment details may have been altered.",
+      tag: "IMAGE CHECKS",
     },
-    web: {
-      paddingTop: Spacing.six,
-      paddingBottom: Spacing.four,
+    {
+      number: "02",
+      title: "Transaction detail extraction",
+      description:
+        "Read available information such as the payment amount, date and transaction reference.",
+      tag: "DETAIL EXTRACTION",
     },
-  });
+    {
+      number: "03",
+      title: "Trusted record comparison",
+      description:
+        "Compare extracted details with an authorised transaction record when one is available.",
+      tag: "PAYMENT CHECK",
+    },
+  ];
 
   return (
-    <ScrollView
-      style={[styles.scrollView, { backgroundColor: theme.background }]}
-      contentInset={insets}
-      contentContainerStyle={[styles.contentContainer, contentPlatformStyle]}>
-      <ThemedView style={styles.container}>
-        <ThemedView style={styles.titleContainer}>
-          <ThemedText type="subtitle">Explore</ThemedText>
-          <ThemedText style={styles.centerText} themeColor="textSecondary">
-            This starter app includes example{'\n'}code to help you get started.
-          </ThemedText>
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.eyebrow}>VYAPARGUARD</Text>
+        <Text style={styles.heading}>Security Centre</Text>
+        <Text style={styles.subtitle}>
+          Understand the checks that help you make safer payment decisions.
+        </Text>
 
-          <ExternalLink href="https://docs.expo.dev" asChild>
-            <Pressable style={({ pressed }) => pressed && styles.pressed}>
-              <ThemedView type="backgroundElement" style={styles.linkButton}>
-                <ThemedText type="link">Expo documentation</ThemedText>
-                <SymbolView
-                  tintColor={theme.text}
-                  name={{ ios: 'arrow.up.right.square', android: 'link', web: 'link' }}
-                  size={12}
-                />
-              </ThemedView>
-            </Pressable>
-          </ExternalLink>
-        </ThemedView>
+        <View style={styles.banner}>
+          <View style={styles.bannerIcon}>
+            <Text style={styles.shield}>✓</Text>
+          </View>
+          <Text style={styles.bannerTitle}>Verify. Then trust.</Text>
+          <Text style={styles.bannerText}>
+            A payment screenshot is not proof that money has reached your
+            account. Always confirm the transaction independently.
+          </Text>
+        </View>
 
-        <ThemedView style={styles.sectionsWrapper}>
-          <Collapsible title="File-based routing">
-            <ThemedText type="small">
-              This app has two screens: <ThemedText type="code">src/app/index.tsx</ThemedText> and{' '}
-              <ThemedText type="code">src/app/explore.tsx</ThemedText>
-            </ThemedText>
-            <ThemedText type="small">
-              The layout file in <ThemedText type="code">src/app/_layout.tsx</ThemedText> sets up
-              the tab navigator.
-            </ThemedText>
-            <ExternalLink href="https://docs.expo.dev/router/introduction">
-              <ThemedText type="linkPrimary">Learn more</ThemedText>
-            </ExternalLink>
-          </Collapsible>
+        <Text style={styles.sectionTitle}>What VyaparGuard checks</Text>
 
-          <Collapsible title="Android, iOS, and web support">
-            <ThemedView type="backgroundElement" style={styles.collapsibleContent}>
-              <ThemedText type="small">
-                You can open this project on Android, iOS, and the web. To open the web version,
-                press <ThemedText type="smallBold">w</ThemedText> in the terminal running this
-                project.
-              </ThemedText>
-              <Image
-                source={require('@/assets/images/tutorial-web.png')}
-                style={styles.imageTutorial}
-              />
-            </ThemedView>
-          </Collapsible>
+        {checks.map((item) => (
+          <View style={styles.card} key={item.number}>
+            <View style={styles.cardTop}>
+              <Text style={styles.number}>{item.number}</Text>
+              <Text style={styles.tag}>{item.tag}</Text>
+            </View>
+            <Text style={styles.cardTitle}>{item.title}</Text>
+            <Text style={styles.cardDescription}>{item.description}</Text>
+          </View>
+        ))}
 
-          <Collapsible title="Images">
-            <ThemedText type="small">
-              For static images, you can use the <ThemedText type="code">@2x</ThemedText> and{' '}
-              <ThemedText type="code">@3x</ThemedText> suffixes to provide files for different
-              screen densities.
-            </ThemedText>
-            <Image source={require('@/assets/images/react-logo.png')} style={styles.imageReact} />
-            <ExternalLink href="https://reactnative.dev/docs/images">
-              <ThemedText type="linkPrimary">Learn more</ThemedText>
-            </ExternalLink>
-          </Collapsible>
+        <Text style={styles.sectionTitle}>Safety checklist</Text>
 
-          <Collapsible title="Light and dark mode components">
-            <ThemedText type="small">
-              This template has light and dark mode support. The{' '}
-              <ThemedText type="code">useColorScheme()</ThemedText> hook lets you inspect what the
-              user&apos;s current color scheme is, and so you can adjust UI colors accordingly.
-            </ThemedText>
-            <ExternalLink href="https://docs.expo.dev/develop/user-interface/color-themes/">
-              <ThemedText type="linkPrimary">Learn more</ThemedText>
-            </ExternalLink>
-          </Collapsible>
+        <View style={styles.checklist}>
+          <Text style={styles.checkItem}>
+            ✓  Open your bank or UPI app directly.
+          </Text>
+          <Text style={styles.checkItem}>
+            ✓  Confirm the amount in your transaction history.
+          </Text>
+          <Text style={styles.checkItem}>
+            ✓  Never rely only on a screenshot or SMS.
+          </Text>
+          <Text style={styles.checkItem}>
+            ✓  Investigate mismatched or repeated reference IDs.
+          </Text>
+        </View>
 
-          <Collapsible title="Animations">
-            <ThemedText type="small">
-              This template includes an example of an animated component. The{' '}
-              <ThemedText type="code">src/components/ui/collapsible.tsx</ThemedText> component uses
-              the powerful <ThemedText type="code">react-native-reanimated</ThemedText> library to
-              animate opening this hint.
-            </ThemedText>
-          </Collapsible>
-        </ThemedView>
-        {Platform.OS === 'web' && <WebBadge />}
-      </ThemedView>
-    </ScrollView>
+        <Text style={styles.disclaimer}>
+          Feature note: screenshot analysis and trusted-record comparison
+          depend on the backend checks that are implemented and available.
+        </Text>
+
+        <Text style={styles.footer}>
+          VyaparGuard · Payment verification assistance
+        </Text>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  scrollView: {
-    flex: 1,
-  },
-  contentContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-  },
   container: {
-    maxWidth: MaxContentWidth,
-    flexGrow: 1,
+    flex: 1,
+    backgroundColor: "#F8FAFC",
   },
-  titleContainer: {
-    gap: Spacing.three,
-    alignItems: 'center',
-    paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.six,
+  content: {
+    padding: 22,
+    paddingBottom: 40,
   },
-  centerText: {
-    textAlign: 'center',
+  eyebrow: {
+    color: "#176B55",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 2,
+    marginTop: 8,
   },
-  pressed: {
-    opacity: 0.7,
+  heading: {
+    color: "#102A43",
+    fontSize: 29,
+    fontWeight: "800",
+    marginTop: 8,
   },
-  linkButton: {
-    flexDirection: 'row',
-    paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.two,
-    borderRadius: Spacing.five,
-    justifyContent: 'center',
-    gap: Spacing.one,
-    alignItems: 'center',
+  subtitle: {
+    color: "#64748B",
+    fontSize: 14,
+    lineHeight: 22,
+    marginTop: 9,
+    marginBottom: 22,
   },
-  sectionsWrapper: {
-    gap: Spacing.five,
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.three,
+  banner: {
+    backgroundColor: "#E4F3ED",
+    borderRadius: 20,
+    padding: 21,
+    marginBottom: 28,
   },
-  collapsibleContent: {
-    alignItems: 'center',
+  bannerIcon: {
+    width: 45,
+    height: 45,
+    borderRadius: 14,
+    backgroundColor: "#176B55",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
   },
-  imageTutorial: {
-    width: '100%',
-    aspectRatio: 296 / 171,
-    borderRadius: Spacing.three,
-    marginTop: Spacing.two,
+  shield: {
+    color: "#FFFFFF",
+    fontSize: 26,
+    fontWeight: "800",
   },
-  imageReact: {
-    width: 100,
-    height: 100,
-    alignSelf: 'center',
+  bannerTitle: {
+    color: "#102A43",
+    fontSize: 21,
+    fontWeight: "800",
+  },
+  bannerText: {
+    color: "#46645A",
+    fontSize: 13,
+    lineHeight: 21,
+    marginTop: 8,
+  },
+  sectionTitle: {
+    color: "#102A43",
+    fontSize: 19,
+    fontWeight: "800",
+    marginBottom: 14,
+  },
+  card: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E8EEF2",
+    padding: 17,
+    marginBottom: 12,
+  },
+  cardTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 13,
+  },
+  number: {
+    color: "#176B55",
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  tag: {
+    color: "#176B55",
+    backgroundColor: "#E4F3ED",
+    overflow: "hidden",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  cardTitle: {
+    color: "#102A43",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  cardDescription: {
+    color: "#64748B",
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 7,
+  },
+  checklist: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E8EEF2",
+    padding: 17,
+    marginBottom: 20,
+  },
+  checkItem: {
+    color: "#334155",
+    fontSize: 13,
+    lineHeight: 21,
+    marginVertical: 6,
+  },
+  disclaimer: {
+    color: "#725B32",
+    backgroundColor: "#FFF5DE",
+    padding: 14,
+    borderRadius: 12,
+    fontSize: 12,
+    lineHeight: 19,
+  },
+  footer: {
+    color: "#94A3B8",
+    textAlign: "center",
+    fontSize: 11,
+    marginTop: 24,
   },
 });
