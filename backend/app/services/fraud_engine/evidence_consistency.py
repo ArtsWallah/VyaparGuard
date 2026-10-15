@@ -13,6 +13,11 @@ from .duplicate_detector import (
     DuplicateDetectionResult,
     DuplicateStatus,
 )
+from app.services.recipient_verification import (
+    PaymentMessageStatus,
+    QRStatus,
+    RecipientVerificationResult,
+)
 from .transaction_matcher import (
     MatchStatus,
     PaymentClaim,
@@ -40,6 +45,14 @@ class FindingCategory(str, Enum):
     DUPLICATE_CHECK_UNAVAILABLE = "DUPLICATE_CHECK_UNAVAILABLE"
     DUPLICATE_SIGNAL = "DUPLICATE_SIGNAL"
     REPLAY_SIGNAL = "REPLAY_SIGNAL"
+    RECIPIENT_MISMATCH = "RECIPIENT_MISMATCH"
+    QR_UNREADABLE = "QR_UNREADABLE"
+    QR_UNSUPPORTED_FORMAT = "QR_UNSUPPORTED_FORMAT"
+    EXPECTED_RECIPIENT_NOT_CONFIGURED = "EXPECTED_RECIPIENT_NOT_CONFIGURED"
+    PAYMENT_MESSAGE_AMOUNT_CONTRADICTION = "PAYMENT_MESSAGE_AMOUNT_CONTRADICTION"
+    PAYMENT_MESSAGE_REFERENCE_CONTRADICTION = "PAYMENT_MESSAGE_REFERENCE_CONTRADICTION"
+    PAYMENT_MESSAGE_UNREADABLE = "PAYMENT_MESSAGE_UNREADABLE"
+    PAYMENT_MESSAGE_INSUFFICIENT = "PAYMENT_MESSAGE_INSUFFICIENT"
 
 
 class FindingSeverity(str, Enum):
@@ -62,6 +75,7 @@ class EvidenceConsistencyInput:
     ocr: Mapping[str, object] | None
     transaction_match: TransactionMatchResult
     duplicate_detection: DuplicateDetectionResult
+    recipient_verification: RecipientVerificationResult | None = None
     ocr_confidence_threshold: float = DEFAULT_OCR_CONFIDENCE_THRESHOLD
     timestamp_tolerance: timedelta = DEFAULT_TIMESTAMP_TOLERANCE
 
@@ -84,6 +98,7 @@ class EvidenceConsistencyResult:
     findings: tuple[ConsistencyFinding, ...]
     compared_fields: tuple[str, ...]
     unavailable_evidence: tuple[str, ...]
+    recipient_verification: RecipientVerificationResult | None = None
 
 
 def _evidence(**values: object) -> Evidence:
@@ -391,6 +406,113 @@ def _add_duplicate_findings(
         )
 
 
+def _recipient_evidence(result: RecipientVerificationResult) -> dict[str, object]:
+    destination = result.qr.destination
+    evidence: dict[str, object] = {
+        "qr_status": result.qr.status.value,
+        "expected_recipient": result.qr.expected_recipient,
+        "expected_recipient_configured": (
+            result.qr.expected_recipient is not None
+        ),
+        "payee_identifier": (
+            destination.payee_identifier if destination is not None else None
+        ),
+        "payee_name": destination.payee_name if destination is not None else None,
+        "qr_amount": destination.amount if destination is not None else None,
+        "qr_reference": destination.reference if destination is not None else None,
+    }
+    if result.message is not None:
+        evidence.update(
+            {
+                "message_status": result.message.status.value,
+                "message_amount": result.message.amount,
+                "message_reference": result.message.reference,
+                "message_compared_fields": result.message.compared_fields,
+            }
+        )
+    return evidence
+
+
+def _add_recipient_findings(
+    findings: list[ConsistencyFinding],
+    unavailable: list[str],
+    result: RecipientVerificationResult | None,
+) -> None:
+    if result is None:
+        unavailable.append("recipient_verification")
+        return
+
+    evidence = _recipient_evidence(result)
+    if result.qr.status is QRStatus.RECIPIENT_MISMATCH:
+        findings.append(
+            ConsistencyFinding(
+                FindingCategory.RECIPIENT_MISMATCH,
+                FindingSeverity.HIGH,
+                "recipient",
+                result.qr.explanation,
+                tuple(evidence.items()),
+            )
+        )
+    elif result.qr.status is QRStatus.UNREADABLE:
+        findings.append(
+            ConsistencyFinding(
+                FindingCategory.QR_UNREADABLE,
+                FindingSeverity.INFO,
+                "qr",
+                result.qr.explanation,
+                tuple(evidence.items()),
+            )
+        )
+    elif result.qr.status is QRStatus.UNSUPPORTED_FORMAT:
+        findings.append(
+            ConsistencyFinding(
+                FindingCategory.QR_UNSUPPORTED_FORMAT,
+                FindingSeverity.INFO,
+                "qr",
+                result.qr.explanation,
+                tuple(evidence.items()),
+            )
+        )
+    elif result.qr.status is QRStatus.EXPECTED_RECIPIENT_NOT_CONFIGURED:
+        findings.append(
+            ConsistencyFinding(
+                FindingCategory.EXPECTED_RECIPIENT_NOT_CONFIGURED,
+                FindingSeverity.INFO,
+                "recipient",
+                result.qr.explanation,
+                tuple(evidence.items()),
+            )
+        )
+
+    if result.message is None:
+        return
+    unavailable.append("payment_message")
+    message = result.message
+    if message.status is PaymentMessageStatus.AMOUNT_MISMATCH:
+        category = FindingCategory.PAYMENT_MESSAGE_AMOUNT_CONTRADICTION
+        severity = FindingSeverity.HIGH
+    elif message.status is PaymentMessageStatus.REFERENCE_MISMATCH:
+        category = FindingCategory.PAYMENT_MESSAGE_REFERENCE_CONTRADICTION
+        severity = FindingSeverity.HIGH
+    elif message.status is PaymentMessageStatus.UNREADABLE:
+        category = FindingCategory.PAYMENT_MESSAGE_UNREADABLE
+        severity = FindingSeverity.LOW
+    elif message.status is PaymentMessageStatus.INSUFFICIENT_DATA:
+        category = FindingCategory.PAYMENT_MESSAGE_INSUFFICIENT
+        severity = FindingSeverity.INFO
+    else:
+        return
+    findings.append(
+        ConsistencyFinding(
+            category,
+            severity,
+            "payment_message",
+            message.explanation,
+            tuple(evidence.items()),
+        )
+    )
+
+
 def evaluate_consistency(
     input_data: EvidenceConsistencyInput,
 ) -> EvidenceConsistencyResult:
@@ -425,6 +547,11 @@ def evaluate_consistency(
         input_data.ocr,
         input_data.ocr_confidence_threshold,
     )
+    _add_recipient_findings(
+        findings,
+        unavailable,
+        input_data.recipient_verification,
+    )
     _add_match_findings(findings, input_data.transaction_match)
     _add_duplicate_findings(findings, unavailable, input_data.duplicate_detection)
 
@@ -432,4 +559,5 @@ def evaluate_consistency(
         findings=tuple(findings),
         compared_fields=tuple(compared_fields),
         unavailable_evidence=tuple(dict.fromkeys(unavailable)),
+        recipient_verification=input_data.recipient_verification,
     )

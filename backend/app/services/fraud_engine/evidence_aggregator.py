@@ -51,6 +51,9 @@ _CONTRADICTION_CATEGORIES = frozenset(
         FindingCategory.CURRENCY_CONTRADICTION,
         FindingCategory.REFERENCE_CONTRADICTION,
         FindingCategory.TIMESTAMP_CONTRADICTION,
+        FindingCategory.RECIPIENT_MISMATCH,
+        FindingCategory.PAYMENT_MESSAGE_AMOUNT_CONTRADICTION,
+        FindingCategory.PAYMENT_MESSAGE_REFERENCE_CONTRADICTION,
     }
 )
 _MANDATORY_FIELDS = frozenset({"amount", "currency"})
@@ -133,6 +136,18 @@ def _verification_blockers(
             FindingCategory.TRUSTED_MATCH_AMBIGUOUS,
             FindingCategory.TRUSTED_MATCH_INSUFFICIENT,
             FindingCategory.DUPLICATE_CHECK_UNAVAILABLE,
+        }:
+            blockers.append(f"blocking finding: {finding.category.value}")
+        elif finding.category in {
+            FindingCategory.QR_UNREADABLE,
+            FindingCategory.QR_UNSUPPORTED_FORMAT,
+        }:
+            evidence = dict(finding.evidence)
+            if evidence.get("expected_recipient_configured"):
+                blockers.append(f"blocking finding: {finding.category.value}")
+        elif finding.category in {
+            FindingCategory.PAYMENT_MESSAGE_UNREADABLE,
+            FindingCategory.PAYMENT_MESSAGE_INSUFFICIENT,
         }:
             blockers.append(f"blocking finding: {finding.category.value}")
 

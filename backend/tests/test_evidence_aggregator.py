@@ -123,6 +123,34 @@ def test_explicit_reference_contradiction_is_suspicious():
     assert result.status is AggregationStatus.SUSPICIOUS
 
 
+def test_recipient_mismatch_is_suspicious():
+    result = aggregate(
+        consistency_result=consistency(
+            finding(
+                FindingCategory.RECIPIENT_MISMATCH,
+                FindingSeverity.HIGH,
+                "recipient",
+            )
+        )
+    )
+
+    assert result.status is AggregationStatus.SUSPICIOUS
+
+
+def test_payment_message_contradiction_is_suspicious():
+    result = aggregate(
+        consistency_result=consistency(
+            finding(
+                FindingCategory.PAYMENT_MESSAGE_AMOUNT_CONTRADICTION,
+                FindingSeverity.HIGH,
+                "payment_message",
+            )
+        )
+    )
+
+    assert result.status is AggregationStatus.SUSPICIOUS
+
+
 def test_replay_is_suspicious_even_without_trusted_match():
     replay = finding(FindingCategory.REPLAY_SIGNAL, FindingSeverity.HIGH)
     result = aggregate(

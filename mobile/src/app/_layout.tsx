@@ -21,6 +21,9 @@ export default function RootLayout() {
         <Stack.Screen name="camera" />
         <Stack.Screen name="upload" />
         <Stack.Screen name="result" />
+        <Stack.Screen name="history" />
+        <Stack.Screen name="history-detail" />
+        <Stack.Screen name="apk-analysis" />
       </Stack>
     </ThemeProvider>
   );

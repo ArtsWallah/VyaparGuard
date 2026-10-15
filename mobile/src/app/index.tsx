@@ -83,7 +83,20 @@ export default function HomeScreen() {
           Select a screenshot from your gallery to get started.
         </Text>
 
-        {/* Safety notice */}
+        <Pressable
+          style={styles.historyButton}
+          onPress={() => router.push("/history")}
+        >
+          <Text style={styles.historyButtonText}>View scan history</Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.historyButton}
+          onPress={() => router.push("/apk-analysis")}
+        >
+          <Text style={styles.historyButtonText}>Screen an Android APK</Text>
+        </Pressable>
+
         <View style={styles.notice}>
           <View style={styles.noticeIcon}>
             <Text style={styles.noticeIconText}>!</Text>
@@ -290,6 +303,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: 'center',
     marginBottom: 23,
+  },
+  historyButton: {
+    borderWidth: 1,
+    borderColor: "#176B55",
+    borderRadius: 15,
+    padding: 16,
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  historyButtonText: {
+    color: "#176B55",
+    fontSize: 15,
+    fontWeight: "800",
   },
   notice: {
     flexDirection: 'row',
