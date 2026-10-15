@@ -1,4 +1,5 @@
 
+import os
 import time
 from uuid import uuid4
 
@@ -6,7 +7,8 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.database import SessionLocal
-from app.db.models import Scan
+from app.db.models import Scan, ScanCheck
+from app.services.fraud_engine_integration import integrate_fraud_engine
 from app.services.payment_analyzer import (
     MAX_FILE_SIZE,
     PaymentImageError,
@@ -28,6 +30,20 @@ ALLOWED_TYPES = {
     "application/octet-stream",
     "binary/octet-stream",
 }
+
+
+def _demo_mode_enabled() -> bool:
+    return os.getenv("VYAPARGUARD_DEMO_MODE", "true").casefold() == "true"
+
+
+def _json_safe(value):
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    return value
 
 
 @app.get("/health")
@@ -83,45 +99,58 @@ async def scan_payment(
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         request_id = str(uuid4())
-
-        # Support both the current analyzer response and the
-        # alternate response shape used by the frontend.
-        verification = result.get("verification") or {}
-        extracted = result.get("extracted") or result.get("ocr") or {}
-
-        verdict = (
-            verification.get("status")
-            or result.get("status")
-            or "UNVERIFIED"
-        )
-
-        amount = extracted.get("amount")
-
-        summary = (
-            verification.get("reason")
-            or "; ".join(result.get("reasons", []))
-            or "Screenshot analyzed; payment remains unverified."
-        )
+        demo_mode = _demo_mode_enabled()
 
         # The database write is part of the request. If it fails,
         # return an error instead of silently losing scan history.
         with SessionLocal() as session:
+            result = integrate_fraud_engine(
+                result,
+                session,
+                request_id,
+                demo_mode=demo_mode,
+            )
+
+            verification = result.get("verification") or {}
+            extracted = result.get("extracted") or result.get("ocr") or {}
+            verdict = verification.get("status") or "UNVERIFIED"
+            amount = extracted.get("amount")
+            summary = (
+                verification.get("reason")
+                or "; ".join(result.get("reasons", []))
+                or "Screenshot analyzed; payment remains unverified."
+            )
+
             scan = Scan(
                 request_id=request_id,
                 verdict=verdict,
-                demo_mode=True,
+                demo_mode=demo_mode,
                 amount=amount,
                 reference_fingerprint=None,
                 summary=summary,
                 processing_ms=elapsed_ms,
             )
             session.add(scan)
+            session.flush()
+
+            fraud_engine = result.get("fraud_engine") or {}
+            consistency = fraud_engine.get("consistency") or {}
+            for finding in consistency.get("findings", []):
+                session.add(
+                    ScanCheck(
+                        scan_id=scan.id,
+                        check_id=str(finding.get("category", "evidence")),
+                        status=str(finding.get("severity", "INFO")),
+                        message=str(finding.get("explanation", "")),
+                        evidence=_json_safe(finding.get("evidence", {})),
+                    )
+                )
             session.commit()
 
         # Preserve the analyzer's existing response fields.
         result["request_id"] = request_id
         result["processing_ms"] = elapsed_ms
-        result["demo_mode"] = True
+        result["demo_mode"] = demo_mode
 
         return result
 
