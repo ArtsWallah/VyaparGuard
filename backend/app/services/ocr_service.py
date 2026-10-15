@@ -1,7 +1,10 @@
 
+import os
 import re
+import shutil
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -11,9 +14,31 @@ from PIL import Image
 from pytesseract import Output
 
 
-pytesseract.pytesseract.tesseract_cmd = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+def _resolve_tesseract_cmd() -> str:
+    configured_path = os.environ.get("TESSERACT_CMD")
+    if configured_path:
+        return configured_path
+
+    path_command = shutil.which("tesseract")
+    if path_command:
+        return path_command
+
+    if os.name == "nt":
+        install_dirs = [
+            Path.home() / "AppData" / "Local" / "Programs" / "Tesseract-OCR",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tesseract-OCR",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+            / "Tesseract-OCR",
+        ]
+        for install_dir in install_dirs:
+            executable = install_dir / "tesseract.exe"
+            if executable.is_file():
+                return str(executable)
+
+    return "tesseract"
+
+
+pytesseract.pytesseract.tesseract_cmd = _resolve_tesseract_cmd()
 
 
 def _normalize_text(text: str) -> str:
