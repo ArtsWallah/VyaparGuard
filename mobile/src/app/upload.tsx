@@ -167,6 +167,7 @@ export default function UploadScreen() {
               mimeType,
             }
           );
+
           responseStatus = uploadResult.status;
           responseText = uploadResult.body;
         } catch {

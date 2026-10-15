@@ -202,11 +202,12 @@ async def scan_payment(
         ) from exc
 
     except SQLAlchemyError as exc:
-        # Avoid returning database credentials or internal details.
+        print("DATABASE ERROR:", repr(exc))
         raise HTTPException(
             status_code=503,
             detail="Scan history database is temporarily unavailable.",
         ) from exc
+
 
     finally:
         if upload_file:
