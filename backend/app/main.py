@@ -1,14 +1,23 @@
 
 import os
+import threading
 import time
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.database import SessionLocal
 from app.db.models import Scan, ScanCheck
-from app.services.fraud_engine_integration import integrate_fraud_engine
+from app.services.apk_analyzer import (
+    APKAnalysisError,
+    MAX_APK_SIZE,
+    analyze_apk,
+)
+from app.services.fraud_engine_integration import (
+    integrate_fraud_engine,
+    reference_fingerprint,
+)
 from app.services.payment_analyzer import (
     MAX_FILE_SIZE,
     PaymentImageError,
@@ -30,6 +39,7 @@ ALLOWED_TYPES = {
     "application/octet-stream",
     "binary/octet-stream",
 }
+_APK_UPLOAD_SLOTS = threading.BoundedSemaphore(2)
 
 
 def _demo_mode_enabled() -> bool:
@@ -46,9 +56,152 @@ def _json_safe(value):
     return value
 
 
+def _serialize_datetime(value):
+    return value.isoformat() if value is not None else None
+
+
+def _serialize_scan(scan: Scan) -> dict:
+    return {
+        "scan_id": scan.request_id,
+        "created_at": _serialize_datetime(scan.created_at),
+        "status": scan.verdict,
+        "amount": scan.amount,
+        "reference_available": scan.reference_fingerprint is not None,
+        "reference_fingerprint": scan.reference_fingerprint,
+        "summary": scan.summary,
+        "processing_ms": scan.processing_ms,
+        "demo_mode": scan.demo_mode,
+    }
+
+
+def _serialize_check(check: ScanCheck) -> dict:
+    return {
+        "check_id": check.check_id,
+        "status": check.status,
+        "message": check.message,
+        "evidence": _json_safe(check.evidence),
+    }
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "VyaparGuard API"}
+
+
+@app.get("/api/v1/scans")
+def list_scans(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    try:
+        with SessionLocal() as session:
+            total = session.query(Scan).count()
+            scans = (
+                session.query(Scan)
+                .order_by(Scan.created_at.desc(), Scan.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+                .all()
+            )
+            return {
+                "items": [_serialize_scan(scan) for scan in scans],
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "has_next": page * page_size < total,
+            }
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Scan history is temporarily unavailable.",
+        ) from exc
+
+
+@app.get("/api/v1/scans/{scan_id}")
+def get_scan(scan_id: str):
+    if not scan_id.strip():
+        raise HTTPException(status_code=400, detail="Scan ID is required.")
+
+    try:
+        with SessionLocal() as session:
+            scan = (
+                session.query(Scan)
+                .filter(Scan.request_id == scan_id)
+                .one_or_none()
+            )
+            if scan is None:
+                raise HTTPException(status_code=404, detail="Scan not found.")
+
+            checks = (
+                session.query(ScanCheck)
+                .filter(ScanCheck.scan_id == scan.id)
+                .order_by(ScanCheck.id.asc())
+                .all()
+            )
+            return {
+                **_serialize_scan(scan),
+                "checks": [_serialize_check(check) for check in checks],
+            }
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Scan history is temporarily unavailable.",
+        ) from exc
+
+
+@app.delete("/api/v1/scans/{scan_id}")
+def delete_scan(scan_id: str):
+    if not scan_id.strip():
+        raise HTTPException(status_code=400, detail="Scan ID is required.")
+
+    try:
+        with SessionLocal() as session:
+            scan = (
+                session.query(Scan)
+                .filter(Scan.request_id == scan_id)
+                .one_or_none()
+            )
+            if scan is None:
+                raise HTTPException(status_code=404, detail="Scan not found.")
+
+            session.query(ScanCheck).filter(
+                ScanCheck.scan_id == scan.id
+            ).delete(synchronize_session=False)
+            session.delete(scan)
+            session.commit()
+            return {"scan_id": scan_id, "deleted": True}
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Scan history is temporarily unavailable.",
+        ) from exc
+
+
+@app.post("/api/v1/apk/analyze")
+async def analyze_apk_file(apk: UploadFile = File(...)):
+    """Screen an APK statically without extracting or executing it."""
+    if not _APK_UPLOAD_SLOTS.acquire(blocking=False):
+        await apk.close()
+        raise HTTPException(
+            status_code=429,
+            detail="APK analysis is busy. Please retry shortly.",
+        )
+    try:
+        content = await apk.read(MAX_APK_SIZE + 1)
+        result = analyze_apk(content, apk.filename or "uploaded.apk")
+        return result.to_dict()
+    except APKAnalysisError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    finally:
+        _APK_UPLOAD_SLOTS.release()
+        await apk.close()
 
 
 @app.post("/api/v1/scan")
@@ -56,6 +209,8 @@ def health_check():
 async def scan_payment(
     image: UploadFile | None = File(None),
     file: UploadFile | None = File(None),
+    expected_recipient: str | None = Form(None),
+    payment_message: str | None = Form(None),
 ):
     upload_file = image or file
     if upload_file is None:
@@ -109,6 +264,9 @@ async def scan_payment(
                 session,
                 request_id,
                 demo_mode=demo_mode,
+                image_bytes=content,
+                expected_recipient=expected_recipient,
+                payment_message=payment_message,
             )
 
             verification = result.get("verification") or {}
@@ -126,7 +284,9 @@ async def scan_payment(
                 verdict=verdict,
                 demo_mode=demo_mode,
                 amount=amount,
-                reference_fingerprint=None,
+                reference_fingerprint=reference_fingerprint(
+                    (result.get("ocr") or {}).get("reference")
+                ),
                 summary=summary,
                 processing_ms=elapsed_ms,
             )

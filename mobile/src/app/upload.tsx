@@ -9,6 +9,7 @@ import {
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -33,11 +34,14 @@ type ScanResponse = {
     forensics?: Record<string, unknown>;
     errors?: string[];
     verification?: Record<string, unknown>;
+    recipient_verification?: Record<string, unknown>;
     detail?: string | { msg?: string }[];
 };
 
 export default function UploadScreen() {
     const [image, setImage] = useState<SelectedImage | null>(null);
+    const [expectedRecipient, setExpectedRecipient] = useState("");
+    const [paymentMessage, setPaymentMessage] = useState("");
     const [loading, setLoading] = useState(false);
 
     async function chooseImage() {
@@ -101,27 +105,37 @@ export default function UploadScreen() {
                 (extension === "png" ? "image/png" : "image/jpeg");
             const filename =
                 image.fileName || `payment-screenshot.${extension || "jpg"}`;
+            const hasAdditionalFields =
+                expectedRecipient.trim().length > 0 || paymentMessage.trim().length > 0;
 
-            let responseStatus: number;
-            let responseText: string;
+            let responseStatus = 0;
+            let responseText = "";
 
             if (Platform.OS !== "web") {
-                try {
-                    // Use native multipart uploader (handles content:// and file:// reliably)
-                    const uploadResult = await FileSystem.uploadAsync(
-                        `${API_URL}/api/v1/scan`,
-                        image.uri,
-                        {
-                            httpMethod: "POST",
-                            uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-                            fieldName: "image",
-                            mimeType: mimeType,
-                        }
-                    );
-                    responseStatus = uploadResult.status;
-                    responseText = uploadResult.body;
-                } catch {
-                    // Fallback to fetch with FormData if uploadAsync encounters an issue
+                let nativeUploadSucceeded = false;
+                if (!hasAdditionalFields) {
+                    try {
+                        // Use native multipart uploader for content:// and file:// URIs.
+                        const uploadResult = await FileSystem.uploadAsync(
+                            `${API_URL}/api/v1/scan`,
+                            image.uri,
+                            {
+                                httpMethod: "POST",
+                                uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+                                fieldName: "image",
+                                mimeType: mimeType,
+                            }
+                        );
+                        responseStatus = uploadResult.status;
+                        responseText = uploadResult.body;
+                        nativeUploadSucceeded = true;
+                    } catch {
+                        nativeUploadSucceeded = false;
+                    }
+                }
+
+                if (!nativeUploadSucceeded) {
+                    // URI-based FormData fallback also carries optional form fields.
                     const formData = new FormData();
                     const filePart = {
                         uri: image.uri,
@@ -130,6 +144,12 @@ export default function UploadScreen() {
                     } as unknown as Blob;
                     formData.append("image", filePart);
                     formData.append("file", filePart);
+                    if (expectedRecipient.trim()) {
+                        formData.append("expected_recipient", expectedRecipient.trim());
+                    }
+                    if (paymentMessage.trim()) {
+                        formData.append("payment_message", paymentMessage.trim());
+                    }
 
                     const response = await fetch(`${API_URL}/api/v1/scan`, {
                         method: "POST",
@@ -145,6 +165,12 @@ export default function UploadScreen() {
                 const blob = await imageFetch.blob();
                 formData.append("image", blob, filename);
                 formData.append("file", blob, filename);
+                if (expectedRecipient.trim()) {
+                    formData.append("expected_recipient", expectedRecipient.trim());
+                }
+                if (paymentMessage.trim()) {
+                    formData.append("payment_message", paymentMessage.trim());
+                }
 
                 const response = await fetch(`${API_URL}/api/v1/scan`, {
                     method: "POST",
@@ -226,6 +252,34 @@ export default function UploadScreen() {
                     Upload a payment screenshot to extract transaction details and
                     inspect possible image manipulation indicators.
                 </Text>
+
+                <View style={styles.recipientSection}>
+                    <Text style={styles.sectionTitle}>Recipient checks (optional)</Text>
+                    <Text style={styles.fieldHint}>
+                        Enter the expected UPI identifier to compare with a QR destination.
+                    </Text>
+                    <TextInput
+                        value={expectedRecipient}
+                        onChangeText={setExpectedRecipient}
+                        placeholder="merchant@upi"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        editable={!loading}
+                        style={styles.textInput}
+                    />
+                    <Text style={styles.fieldHint}>
+                        You may paste one payment notification for amount/reference comparison.
+                        It is treated as untrusted evidence.
+                    </Text>
+                    <TextInput
+                        value={paymentMessage}
+                        onChangeText={setPaymentMessage}
+                        placeholder="Optional payment message"
+                        multiline
+                        editable={!loading}
+                        style={[styles.textInput, styles.messageInput]}
+                    />
+                </View>
 
                 <View style={styles.uploadCard}>
                     {image ? (
@@ -336,6 +390,40 @@ const styles = StyleSheet.create({
         fontSize: 15,
         lineHeight: 23,
         marginBottom: 25,
+    },
+    recipientSection: {
+        backgroundColor: "#FFFFFF",
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: "#E4E7EC",
+        padding: 16,
+        marginBottom: 18,
+    },
+    sectionTitle: {
+        color: "#101828",
+        fontSize: 17,
+        fontWeight: "800",
+        marginBottom: 7,
+    },
+    fieldHint: {
+        color: "#667085",
+        fontSize: 12,
+        lineHeight: 18,
+        marginBottom: 9,
+    },
+    textInput: {
+        borderWidth: 1,
+        borderColor: "#D0D5DD",
+        borderRadius: 10,
+        color: "#101828",
+        fontSize: 14,
+        paddingHorizontal: 12,
+        paddingVertical: 11,
+        marginBottom: 13,
+    },
+    messageInput: {
+        minHeight: 76,
+        textAlignVertical: "top",
     },
     uploadCard: {
         backgroundColor: "#FFFFFF",

@@ -68,6 +68,24 @@ type ScanResult = {
         source?: string;
         reason?: string;
     };
+    recipient_verification?: {
+        qr?: {
+            status?: string;
+            explanation?: string;
+            expected_recipient?: string | null;
+            destination?: {
+                payee_identifier?: string | null;
+                payee_name?: string | null;
+                amount?: string | number | null;
+                reference?: string | null;
+            } | null;
+        };
+        payment_message?: {
+            status?: string;
+            explanation?: string;
+            untrusted?: boolean;
+        } | null;
+    };
 };
 
 function displayValue(value: string | number | null | undefined): string {
@@ -158,6 +176,7 @@ export default function ResultScreen() {
     const forensics = data?.forensics;
     const verification = data?.verification;
     const quality = data?.image_quality;
+    const recipientVerification = data?.recipient_verification;
 
     if (!data) {
         return (
@@ -212,6 +231,50 @@ export default function ResultScreen() {
                         </Text>
                     </View>
                 </View>
+
+                {recipientVerification ? (
+                    <View style={styles.recipientCard}>
+                        <Text style={styles.sectionTitle}>Recipient and message checks</Text>
+                        <DetailRow
+                            label="QR outcome"
+                            value={formatLabel(recipientVerification.qr?.status)}
+                        />
+                        <DetailRow
+                            label="QR recipient"
+                            value={displayValue(
+                                recipientVerification.qr?.destination?.payee_identifier
+                            )}
+                        />
+                        <DetailRow
+                            label="Expected recipient"
+                            value={displayValue(
+                                recipientVerification.qr?.expected_recipient
+                            )}
+                        />
+                        <Text style={styles.bodyText}>
+                            {recipientVerification.qr?.explanation ||
+                                "No QR destination result was provided."}
+                        </Text>
+                        {recipientVerification.payment_message ? (
+                            <>
+                                <Text style={styles.subheading}>Payment message</Text>
+                                <Text style={styles.bodyText}>
+                                    {formatLabel(recipientVerification.payment_message.status)}
+                                    {recipientVerification.payment_message.untrusted
+                                        ? " · untrusted evidence"
+                                        : ""}
+                                </Text>
+                                <Text style={styles.bodyText}>
+                                    {recipientVerification.payment_message.explanation}
+                                </Text>
+                            </>
+                        ) : null}
+                        <Text style={styles.limitationsText}>
+                            A QR match or message agreement identifies consistency only;
+                            it does not prove payment settlement.
+                        </Text>
+                    </View>
+                ) : null}
 
                 <View style={styles.amountCard}>
                     <Text style={styles.mutedLabel}>AMOUNT READ FROM SCREENSHOT</Text>
@@ -452,6 +515,20 @@ const styles = StyleSheet.create({
         borderRadius: 15,
         padding: 18,
         marginBottom: 15,
+    },
+    recipientCard: {
+        backgroundColor: "#FFFFFF",
+        borderRadius: 16,
+        padding: 17,
+        marginBottom: 15,
+        borderWidth: 1,
+        borderColor: "#D0E8DE",
+    },
+    limitationsText: {
+        color: "#667085",
+        fontSize: 12,
+        lineHeight: 18,
+        marginTop: 12,
     },
     mutedLabel: {
         color: "#667085",

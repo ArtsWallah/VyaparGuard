@@ -37,6 +37,10 @@ from app.services.fraud_engine.transaction_matcher import (
     TrustedTransactionSource,
     match_transaction,
 )
+from app.services.recipient_verification import (
+    RecipientVerificationResult,
+    verify_recipient_evidence,
+)
 
 
 class EmptyTrustedTransactionSource:
@@ -154,6 +158,10 @@ def _serialize_value(value: object) -> object:
         return [_serialize_value(item) for item in value]
     if isinstance(value, dict):
         return {key: _serialize_value(item) for key, item in value.items()}
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
     return value
 
 
@@ -164,6 +172,43 @@ def _serialize_finding(finding: ConsistencyFinding) -> dict[str, object]:
         "field": finding.field,
         "explanation": finding.explanation,
         "evidence": _serialize_value(dict(finding.evidence)),
+    }
+
+
+def _serialize_recipient_verification(
+    result: RecipientVerificationResult,
+) -> dict[str, object]:
+    destination = result.qr.destination
+    message = result.message
+    return {
+        "qr": {
+            "status": result.qr.status.value,
+            "explanation": result.qr.explanation,
+            "expected_recipient": result.qr.expected_recipient,
+            "destination": (
+                {
+                    "scheme": destination.scheme,
+                    "payee_identifier": destination.payee_identifier,
+                    "payee_name": destination.payee_name,
+                    "amount": _serialize_value(destination.amount),
+                    "reference": destination.reference,
+                }
+                if destination is not None
+                else None
+            ),
+        },
+        "payment_message": (
+            {
+                "status": message.status.value,
+                "amount": _serialize_value(message.amount),
+                "reference": message.reference,
+                "compared_fields": list(message.compared_fields),
+                "explanation": message.explanation,
+                "untrusted": True,
+            }
+            if message is not None
+            else None
+        ),
     }
 
 
@@ -198,6 +243,13 @@ def _serialize_aggregation(
             "findings": [_serialize_finding(item) for item in consistency.findings],
             "compared_fields": list(consistency.compared_fields),
             "unavailable_evidence": list(consistency.unavailable_evidence),
+            "recipient_verification": (
+                _serialize_recipient_verification(
+                    consistency.recipient_verification
+                )
+                if consistency.recipient_verification is not None
+                else None
+            ),
         },
     }
 
@@ -244,6 +296,9 @@ def integrate_fraud_engine(
     *,
     demo_mode: bool,
     image_phash: str | None = None,
+    image_bytes: bytes | None = None,
+    expected_recipient: str | None = None,
+    payment_message: str | None = None,
 ) -> dict[str, Any]:
     """Run all Fraud Engine flows and enrich an analyzer response.
 
@@ -275,12 +330,20 @@ def integrate_fraud_engine(
         SeenClaimHistory(session, image_sha256, reference_hash),
     )
 
+    recipient_verification = verify_recipient_evidence(
+        image_bytes or b"",
+        expected_recipient=expected_recipient,
+        payment_message=payment_message,
+        ocr=ocr,
+    )
+
     consistency = evaluate_consistency(
         EvidenceConsistencyInput(
             claim=claim,
             ocr=ocr,
             transaction_match=transaction_match,
             duplicate_detection=duplicate_detection,
+            recipient_verification=recipient_verification,
         )
     )
     aggregation = aggregate_evidence(
@@ -317,5 +380,8 @@ def integrate_fraud_engine(
         "source": verification_source,
         "reason": "; ".join(reasons),
     }
+    analysis_result["recipient_verification"] = _serialize_recipient_verification(
+        recipient_verification
+    )
     analysis_result["fraud_engine"] = _serialize_aggregation(aggregation)
     return analysis_result
