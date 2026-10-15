@@ -1,13 +1,13 @@
 
 import { useMemo } from "react";
 import {
-    SafeAreaView,
     ScrollView,
     StyleSheet,
     Text,
     Pressable,
     View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
 
 type PaymentOCR = {
