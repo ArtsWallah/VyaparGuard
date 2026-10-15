@@ -25,7 +25,7 @@ type SelectedImage = Pick<ImagePicker.ImagePickerAsset, 'uri'> & {
   webFile?: File;
 };
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.22.63.92:8000';
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 // Local development only; use HTTPS in production.
 
 export default function UploadScreen() {
