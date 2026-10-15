@@ -20,6 +20,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="scan" />
+        <Stack.Screen name="camera" />
         <Stack.Screen name="upload" />
         <Stack.Screen name="result" />
       </Stack>
