@@ -1,4 +1,3 @@
-
 import os
 import re
 import shutil
@@ -12,7 +11,6 @@ import numpy as np
 import pytesseract
 from PIL import Image
 from pytesseract import Output
-
 
 def _resolve_tesseract_cmd() -> str:
     configured_path = os.environ.get("TESSERACT_CMD")
@@ -39,6 +37,7 @@ def _resolve_tesseract_cmd() -> str:
 
 
 pytesseract.pytesseract.tesseract_cmd = _resolve_tesseract_cmd()
+
 
 
 def _normalize_text(text: str) -> str:
