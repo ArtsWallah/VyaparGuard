@@ -1,7 +1,10 @@
 import base64
+import logging
 import os
 import time
 from uuid import uuid4
+
+logger = logging.getLogger("uvicorn.error")
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from sqlalchemy.exc import SQLAlchemyError
@@ -128,51 +131,61 @@ async def scan_payment(
         request_id = str(uuid4())
         demo_mode = _demo_mode_enabled()
 
-        # The database write is part of the request. If it fails,
-        # return an error instead of silently losing scan history.
-        with SessionLocal() as session:
-            result = integrate_fraud_engine(
-                result,
-                session,
-                request_id,
-                demo_mode=demo_mode,
-            )
-
-            verification = result.get("verification") or {}
-            extracted = result.get("extracted") or result.get("ocr") or {}
-            verdict = verification.get("status") or "UNVERIFIED"
-            amount = extracted.get("amount")
-            summary = (
-                verification.get("reason")
-                or "; ".join(result.get("reasons", []))
-                or "Screenshot analyzed; payment remains unverified."
-            )
-
-            scan = Scan(
-                request_id=request_id,
-                verdict=verdict,
-                demo_mode=demo_mode,
-                amount=amount,
-                reference_fingerprint=None,
-                summary=summary,
-                processing_ms=elapsed_ms,
-            )
-            session.add(scan)
-            session.flush()
-
-            fraud_engine = result.get("fraud_engine") or {}
-            consistency = fraud_engine.get("consistency") or {}
-            for finding in consistency.get("findings", []):
-                session.add(
-                    ScanCheck(
-                        scan_id=scan.id,
-                        check_id=str(finding.get("category", "evidence")),
-                        status=str(finding.get("severity", "INFO")),
-                        message=str(finding.get("explanation", "")),
-                        evidence=_json_safe(finding.get("evidence", {})),
-                    )
+        # The database write records scan history. With ResilientSessionFactory,
+        # it writes to remote Supabase or local SQLite fallback.
+        try:
+            with SessionLocal() as session:
+                result = integrate_fraud_engine(
+                    result,
+                    session,
+                    request_id,
+                    demo_mode=demo_mode,
                 )
-            session.commit()
+
+                verification = result.get("verification") or {}
+                extracted = result.get("extracted") or result.get("ocr") or {}
+                verdict = verification.get("status") or "UNVERIFIED"
+                amount = extracted.get("amount")
+                summary = (
+                    verification.get("reason")
+                    or "; ".join(result.get("reasons", []))
+                    or "Screenshot analyzed; payment remains unverified."
+                )
+
+                try:
+                    numeric_amount = float(amount) if amount is not None else None
+                except (ValueError, TypeError):
+                    numeric_amount = None
+
+                scan = Scan(
+                    request_id=request_id,
+                    verdict=str(verdict)[:20],
+                    demo_mode=demo_mode,
+                    amount=numeric_amount,
+                    reference_fingerprint=None,
+                    summary=summary,
+                    processing_ms=elapsed_ms,
+                )
+                session.add(scan)
+                session.flush()
+
+                fraud_engine = result.get("fraud_engine") or {}
+                consistency = fraud_engine.get("consistency") or {}
+                for finding in consistency.get("findings", []):
+                    session.add(
+                        ScanCheck(
+                            scan_id=scan.id,
+                            check_id=str(finding.get("category", "evidence"))[:100],
+                            status=str(finding.get("severity", "INFO"))[:20],
+                            message=str(finding.get("explanation", "")),
+                            evidence=_json_safe(finding.get("evidence", {})),
+                        )
+                    )
+                session.commit()
+        except SQLAlchemyError as db_exc:
+            logger.warning(
+                "Database warning while recording scan %s: %s", request_id, db_exc
+            )
 
         # Preserve the analyzer's existing response fields.
         result["request_id"] = request_id
@@ -199,13 +212,6 @@ async def scan_payment(
         raise HTTPException(
             status_code=status_code,
             detail=exc.message,
-        ) from exc
-
-    except SQLAlchemyError as exc:
-        # Avoid returning database credentials or internal details.
-        raise HTTPException(
-            status_code=503,
-            detail="Scan history database is temporarily unavailable.",
         ) from exc
 
     finally:

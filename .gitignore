@@ -1,4 +1,3 @@
-@'
 # Python
 __pycache__/
 *.py[cod]
@@ -25,4 +24,4 @@ Thumbs.db
 # Generated test artifacts
 uploads/
 *.log
-'@ | Set-Content .gitignore
+*.db
