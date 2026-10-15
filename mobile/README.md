@@ -20,3 +20,6 @@ A screenshot alone does not prove that money was received.
 The MVP uses simulated trusted records unless a real authorized
 transaction source is explicitly configured.
 '@ | Set-Content README.md
+
+### TesseractOCR
+ winget install --id UB-Mannheim.TesseractOCR -e
