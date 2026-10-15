@@ -1,10 +1,9 @@
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
     Image,
-    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -14,7 +13,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import { router } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { clearCapturedImage, getCapturedImage } from "@/services/image_cache";
 
 const API_URL = "http://172.22.63.92:8000";
 
@@ -22,23 +22,83 @@ type SelectedImage = {
     uri: string;
     fileName?: string | null;
     mimeType?: string | null;
-    fileSize?: number;
 };
 
-type ScanResponse = {
-    schema_version?: string;
-    file?: Record<string, unknown>;
-    ocr?: Record<string, unknown>;
-    image_quality?: Record<string, unknown>;
-    forensics?: Record<string, unknown>;
-    errors?: string[];
-    verification?: Record<string, unknown>;
-    detail?: string | { msg?: string }[];
-};
+async function resolveValidUri(uri: string): Promise<string> {
+    try {
+        const info = await FileSystem.getInfoAsync(uri);
+        if (info.exists) return uri;
+
+        // In Expo Go on Android, ExperienceData directory contains '%2540' and '%252F'.
+        // Expo Router's search params parser automatically decodes '%2540' -> '%40' and '%252F' -> '%2F'.
+        // If decoded, reconstruct the original path.
+        if (uri.includes("%40") || uri.includes("%2F")) {
+            const restored = uri
+                .replace(/%40/g, "%2540")
+                .replace(/%2F/g, "%252F");
+            const restoredInfo = await FileSystem.getInfoAsync(restored);
+            if (restoredInfo.exists) {
+                return restored;
+            }
+        }
+    } catch {
+        // Fall back to original URI
+    }
+    return uri;
+}
 
 export default function UploadScreen() {
+    const params = useLocalSearchParams<{
+        cameraUri?: string | string[];
+    }>();
+
+    const cameraUri = Array.isArray(params.cameraUri)
+        ? params.cameraUri[0]
+        : params.cameraUri;
+
     const [image, setImage] = useState<SelectedImage | null>(null);
     const [loading, setLoading] = useState(false);
+    const [previewError, setPreviewError] = useState(false);
+
+    // Pick up newly captured images from the live camera without URL-param corruption
+    useFocusEffect(
+        useCallback(() => {
+            const captured = getCapturedImage();
+            if (captured?.uri) {
+                setImage({
+                    uri: captured.uri,
+                    fileName: captured.fileName || "camera-capture.jpg",
+                    mimeType: captured.mimeType || "image/jpeg",
+                });
+                setPreviewError(false);
+                clearCapturedImage();
+            }
+        }, [])
+    );
+
+    useEffect(() => {
+        if (!cameraUri) return;
+
+        let isMounted = true;
+
+        async function initCameraUri(uri: string) {
+            const resolvedUri = await resolveValidUri(uri);
+            if (isMounted) {
+                setImage({
+                    uri: resolvedUri,
+                    fileName: "camera-capture.jpg",
+                    mimeType: "image/jpeg",
+                });
+                setPreviewError(false);
+            }
+        }
+
+        initCameraUri(cameraUri);
+
+        return () => {
+            isMounted = false;
+        };
+    }, [cameraUri]);
 
     async function chooseImage() {
         try {
@@ -67,8 +127,8 @@ export default function UploadScreen() {
                 uri: asset.uri,
                 fileName: asset.fileName,
                 mimeType: asset.mimeType,
-                fileSize: asset.fileSize,
             });
+            setPreviewError(false);
         } catch (error) {
             Alert.alert(
                 "Image selection failed",
@@ -78,136 +138,92 @@ export default function UploadScreen() {
     }
 
     async function analyzeScreenshot() {
-        if (!image?.uri) {
-            Alert.alert("Select an image", "Choose a payment screenshot first.");
-            return;
-        }
-
-        if (image.fileSize && image.fileSize > 10 * 1024 * 1024) {
-            Alert.alert(
-                "File too large",
-                "The selected image exceeds the 10 MB processing limit. Please choose a smaller image."
-            );
+        if (!image || loading) {
+            if (!image) {
+                Alert.alert("Select an image", "Capture or choose an image first.");
+            }
             return;
         }
 
         setLoading(true);
 
         try {
-            // Give the multipart file part an explicit filename and MIME type.
-            const extension = image.fileName?.split(".").pop()?.toLowerCase();
-            const mimeType =
-                image.mimeType ||
-                (extension === "png" ? "image/png" : "image/jpeg");
-            const filename =
-                image.fileName || `payment-screenshot.${extension || "jpg"}`;
+            // Verify that the local image is available before uploading.
+            const uploadUri = await resolveValidUri(image.uri);
+            const info = await FileSystem.getInfoAsync(uploadUri);
 
-            let responseStatus: number;
-            let responseText: string;
-
-            if (Platform.OS !== "web") {
-                try {
-                    // Use native multipart uploader (handles content:// and file:// reliably)
-                    const uploadResult = await FileSystem.uploadAsync(
-                        `${API_URL}/api/v1/scan`,
-                        image.uri,
-                        {
-                            httpMethod: "POST",
-                            uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-                            fieldName: "image",
-                            mimeType: mimeType,
-                        }
-                    );
-                    responseStatus = uploadResult.status;
-                    responseText = uploadResult.body;
-                } catch {
-                    // Fallback to fetch with FormData if uploadAsync encounters an issue
-                    const formData = new FormData();
-                    const filePart = {
-                        uri: image.uri,
-                        name: filename,
-                        type: mimeType,
-                    } as unknown as Blob;
-                    formData.append("image", filePart);
-                    formData.append("file", filePart);
-
-                    const response = await fetch(`${API_URL}/api/v1/scan`, {
-                        method: "POST",
-                        body: formData,
-                    });
-                    responseStatus = response.status;
-                    responseText = await response.text();
-                }
-            } else {
-                // Web: convert local blob URI to real Blob
-                const formData = new FormData();
-                const imageFetch = await fetch(image.uri);
-                const blob = await imageFetch.blob();
-                formData.append("image", blob, filename);
-                formData.append("file", blob, filename);
-
-                const response = await fetch(`${API_URL}/api/v1/scan`, {
-                    method: "POST",
-                    body: formData,
-                });
-                responseStatus = response.status;
-                responseText = await response.text();
-            }
-
-            let data: ScanResponse;
-
-            try {
-                data = JSON.parse(responseText) as ScanResponse;
-            } catch {
+            if (!info.exists) {
                 throw new Error(
-                    `The server returned an invalid response (HTTP ${responseStatus}).`
+                    "The image file is no longer available. Capture the screen again."
                 );
             }
 
-            if (responseStatus < 200 || responseStatus >= 300) {
-                const detail = data.detail;
-                let message = `Request failed (HTTP ${responseStatus}).`;
+            const extension = image.fileName?.split(".").pop()?.toLowerCase();
 
-                if (typeof detail === "string") {
-                    message = detail;
-                } else if (Array.isArray(detail)) {
-                    message = detail
-                        .map((item) =>
-                            typeof item === "object" && item && "msg" in item
-                                ? String(item.msg)
-                                : String(item)
-                        )
-                        .join("\n");
-                } else if (typeof detail === "object" && detail !== null) {
-                    const detailObj = detail as Record<string, unknown>;
-                    message = String(
-                        detailObj.message ||
-                        detailObj.msg ||
-                        detailObj.detail ||
-                        message
-                    );
+            const mimeType =
+                image.mimeType ||
+                (extension === "png" ? "image/png" : "image/jpeg");
+
+            // Upload the file URI directly without calling File.bytes().
+            const response = await FileSystem.uploadAsync(
+                `${API_URL}/api/v1/scan`,
+                uploadUri,
+                {
+                    httpMethod: "POST",
+                    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+                    fieldName: "image",
+                    mimeType,
+                    parameters: {},
                 }
+            );
 
-                throw new Error(message);
+            let data: any;
+
+            try {
+                data = JSON.parse(response.body);
+            } catch {
+                throw new Error(
+                    `Invalid server response (HTTP ${response.status}).`
+                );
+            }
+
+            if (response.status < 200 || response.status >= 300) {
+                const detail =
+                    typeof data.detail === "string"
+                        ? data.detail
+                        : Array.isArray(data.detail)
+                            ? data.detail
+                                .map(
+                                    (item: { msg?: string }) =>
+                                        item.msg || "Invalid request"
+                                )
+                                .join("\n")
+                            : `Upload failed (HTTP ${response.status}).`;
+
+                throw new Error(detail);
             }
 
             router.push({
                 pathname: "/result",
                 params: {
-                    result: encodeURIComponent(JSON.stringify(data)),
+                    result: JSON.stringify(data),
                 },
             });
         } catch (error) {
             Alert.alert(
                 "Analysis failed",
                 error instanceof Error
-                    ? `${error.message}\n\nCheck that the backend is running and your phone can reach ${API_URL}.`
-                    : "Could not upload the screenshot. Please try again."
+                    ? `${error.message}\n\nBackend: ${API_URL}`
+                    : "Could not upload the image. Please try again."
             );
         } finally {
             setLoading(false);
         }
     }
+
+    const isCaptured = Boolean(
+        cameraUri || image?.fileName?.startsWith("camera-capture")
+    );
 
     return (
         <SafeAreaView style={styles.safeArea}>
@@ -215,29 +231,41 @@ export default function UploadScreen() {
                 <Pressable
                     onPress={() => router.back()}
                     style={styles.backButton}
-                    accessibilityRole="button"
                 >
                     <Text style={styles.backText}>‹ Back</Text>
                 </Pressable>
 
                 <Text style={styles.eyebrow}>VYAPARGUARD / SCANNER</Text>
-                <Text style={styles.title}>Analyze payment screenshot</Text>
+
+                <Text style={styles.title}>
+                    {isCaptured ? "Review captured screen" : "Analyze payment screenshot"}
+                </Text>
+
                 <Text style={styles.description}>
-                    Upload a payment screenshot to extract transaction details and
-                    inspect possible image manipulation indicators.
+                    Review the image of the other phone's screen, then extract the
+                    visible transaction details.
                 </Text>
 
                 <View style={styles.uploadCard}>
-                    {image ? (
-                        <Image source={{ uri: image.uri }} style={styles.preview} />
+                    {image && !previewError ? (
+                        <Image
+                            source={{ uri: image.uri }}
+                            style={styles.preview}
+                            resizeMode="contain"
+                            onError={() => setPreviewError(true)}
+                        />
                     ) : (
                         <View style={styles.placeholder}>
-                            <Text style={styles.placeholderIcon}>▧</Text>
+                            <Text style={styles.placeholderIcon}>
+                                {previewError ? "!" : "▧"}
+                            </Text>
                             <Text style={styles.placeholderTitle}>
-                                No screenshot selected
+                                {previewError ? "Preview unavailable" : "No image selected"}
                             </Text>
                             <Text style={styles.placeholderDescription}>
-                                Choose a PNG or JPEG image from your phone.
+                                {previewError
+                                    ? "The image could not be displayed. Capture or select it again."
+                                    : "Capture a screen or choose a PNG/JPEG image."}
                             </Text>
                         </View>
                     )}
@@ -252,7 +280,7 @@ export default function UploadScreen() {
                         ]}
                     >
                         <Text style={styles.secondaryButtonText}>
-                            {image ? "Choose another image" : "Choose screenshot"}
+                            {image ? "Choose another image" : "Choose from gallery"}
                         </Text>
                     </Pressable>
 
@@ -279,17 +307,25 @@ export default function UploadScreen() {
                         </View>
                     ) : (
                         <Text style={styles.primaryButtonText}>
-                            Analyze screenshot →
+                            Extract text and analyze →
                         </Text>
                     )}
+                </Pressable>
+
+                <Pressable
+                    onPress={() => router.push("/camera")}
+                    disabled={loading}
+                    style={styles.cameraButton}
+                >
+                    <Text style={styles.cameraButtonText}>Open live camera</Text>
                 </Pressable>
 
                 <View style={styles.notice}>
                     <Text style={styles.noticeTitle}>Important verification notice</Text>
                     <Text style={styles.noticeText}>
-                        OCR reads text from an image, and forensic checks look for possible
-                        manipulation indicators. Neither proves that money was received.
-                        Always confirm payment in your bank or trusted transaction records.
+                        The scanner extracts visible text and checks for possible image
+                        manipulation indicators. This does not prove that money was
+                        received. Confirm payment using trusted transaction records.
                     </Text>
                 </View>
             </ScrollView>
@@ -350,7 +386,6 @@ const styles = StyleSheet.create({
         height: 320,
         borderRadius: 12,
         backgroundColor: "#EAECF0",
-        resizeMode: "contain",
         marginBottom: 15,
     },
     placeholder: {
@@ -409,7 +444,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
         padding: 14,
-        marginBottom: 22,
+        marginBottom: 12,
     },
     primaryButtonText: {
         color: "#FFFFFF",
@@ -420,6 +455,20 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
         gap: 10,
+    },
+    cameraButton: {
+        minHeight: 48,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: "#157347",
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 22,
+    },
+    cameraButtonText: {
+        color: "#157347",
+        fontSize: 14,
+        fontWeight: "800",
     },
     disabled: {
         opacity: 0.45,
